@@ -231,10 +231,82 @@ export const configInPublicRepo: ScanRule = {
   },
 };
 
+// ─── SF-SC-010: LangChain Unsanitized Passthrough ───────────────
+
+export const langchainPassthrough: ScanRule = {
+  id: "SF-SC-010",
+  name: "LangChain: Unsanitized RunnablePassthrough to Tools",
+  description: "LangChain chains using RunnablePassthrough forward user input directly to downstream tools without intermediate validation, amplifying prompt injection risk.",
+  category: "supply_chain",
+  severity: "high",
+  frameworks: ["langchain"],
+  compliance: [
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM01", description: "Prompt Injection via passthrough" },
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM05", description: "Improper Output Handling in chain" },
+    { framework: "MITRE_ATLAS" as const, reference: "AML.T0051", description: "LLM Prompt Injection" },
+  ],
+  phase: "static",
+  lifecycle: "experimental",
+  since: "0.2.0",
+  auto_fix: {
+    description: "Replace RunnablePassthrough() with a validation step that sanitizes user input before forwarding to tools.",
+    suggested_config: "# Replace:\n#   RunnablePassthrough()\n# With:\n#   RunnableLambda(validate_and_sanitize)",
+  },
+  known_false_positives: [
+    {
+      condition: "RunnablePassthrough used for metadata forwarding in internal pipelines with no user-facing input",
+      recommended_action: "Suppress with: # sentinelflow-ignore: SF-SC-010 -- Internal pipeline, no user input",
+    },
+  ],
+  framework_compat: [{ framework: "langchain", min_version: "0.2.0" }],
+
+  evaluate(ctx: RuleContext): EnterpriseFinding[] {
+    const findings: EnterpriseFinding[] = [];
+    for (const file of ctx.config_files) {
+      if (!file.path.endsWith(".py")) continue;
+      if (!file.content.includes("langchain") && !file.content.includes("langgraph")) continue;
+
+      const passthroughPattern = /RunnablePassthrough\s*\(\s*\)/g;
+      let match: RegExpExecArray | null;
+      while ((match = passthroughPattern.exec(file.content)) !== null) {
+        const surroundingLines = file.content.substring(
+          Math.max(0, (match.index ?? 0) - 500),
+          Math.min(file.content.length, (match.index ?? 0) + 500)
+        );
+        const hasToolBinding = /\.bind_tools\(|Tool\(|@tool|BaseTool|StructuredTool/.test(surroundingLines);
+
+        if (hasToolBinding) {
+          const line = file.content.substring(0, match.index ?? 0).split("\n").length;
+          findings.push(createEnterpriseFinding(this, {
+            id: `${this.id}-${findings.length}`,
+            title: `Unsanitized passthrough to tool-bound chain in ${file.path}`,
+            description:
+              "RunnablePassthrough() forwards input directly to a chain that binds tools. " +
+              "User-controlled input reaches tool invocations without intermediate validation. " +
+              "This amplifies prompt injection risk — a malicious prompt can invoke tools " +
+              "with attacker-controlled arguments.",
+            recommendation:
+              "Replace RunnablePassthrough() with a RunnableLambda that validates and sanitizes " +
+              "input before forwarding. At minimum, strip special characters and enforce schema " +
+              "validation on tool arguments. See https://sentinelflow.dev/rules/SF-SC-010",
+            location: { file: file.path, line, snippet: "RunnablePassthrough()" },
+            cwe: "CWE-1427",
+            cve: ["CVE-2025-68664"],
+            remediation_effort: "medium",
+            auto_fix: this.auto_fix,
+          }));
+        }
+      }
+    }
+    return findings;
+  },
+};
+
 export const SUPPLY_CHAIN_RULES: ScanRule[] = [
   mcpNoIntegrity,
   toolDescriptionPoisoning,
   mcpNoAuth,
   frameworkCVE,
   configInPublicRepo,
+  langchainPassthrough,
 ];

@@ -34,15 +34,15 @@ import { AUDIT_LOGGING_RULES } from "./audit-logging";
 import { COMPLIANCE_DOCS_RULES } from "./compliance-docs";
 import { NETWORK_SECURITY_RULES } from "./network-security";
 
-/** All built-in scan rules — 41 statically-detectable rules */
+/** All built-in scan rules — 46 statically-detectable rules */
 export const BUILT_IN_RULES: ScanRule[] = [
   ...PROMPT_INJECTION_RULES,   // 4 rules
   ...ACCESS_CONTROL_RULES,     // 5 rules
-  ...SUPPLY_CHAIN_RULES,       // 5 rules
+  ...SUPPLY_CHAIN_RULES,       // 6 rules (+1: SC-010 LangChain passthrough)
   ...DATA_GOVERNANCE_RULES,    // 3 rules
   ...COST_GOVERNANCE_RULES,    // 5 rules
-  ...FRAMEWORK_CONFIG_RULES,   // 6 rules
-  ...MULTI_AGENT_RULES,        // 3 rules
+  ...FRAMEWORK_CONFIG_RULES,   // 8 rules (+2: FC-008 Codex full-auto, FC-009 Cursor alwaysApply)
+  ...MULTI_AGENT_RULES,        // 5 rules (+2: MA-007 CrewAI hierarchical, MA-008 config drift)
   ...AUDIT_LOGGING_RULES,      // 3 rules
   ...COMPLIANCE_DOCS_RULES,    // 4 rules
   ...NETWORK_SECURITY_RULES,   // 3 rules

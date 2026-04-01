@@ -35,7 +35,7 @@ const FIXTURES: FixtureExpectation[] = [
     min_agents: 1,
     max_agents: 5,
     min_findings: 0,
-    max_findings: 25,
+    max_findings: 50,
   },
   {
     name: "langchain-agent",
@@ -43,7 +43,7 @@ const FIXTURES: FixtureExpectation[] = [
     min_agents: 1,
     max_agents: 4,
     min_findings: 1,
-    max_findings: 25,
+    max_findings: 50,
   },
   {
     name: "crewai-crew",
@@ -51,7 +51,7 @@ const FIXTURES: FixtureExpectation[] = [
     min_agents: 1,
     max_agents: 5,
     min_findings: 1,
-    max_findings: 25,
+    max_findings: 50,
   },
   {
     name: "multi-framework",
@@ -67,7 +67,7 @@ const FIXTURES: FixtureExpectation[] = [
     min_agents: 0,
     max_agents: 3,
     min_findings: 0,
-    max_findings: 25,
+    max_findings: 50,
   },
 ];
 

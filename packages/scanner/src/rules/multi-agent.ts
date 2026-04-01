@@ -133,8 +133,145 @@ export const noOutputValidationBetweenAgents: ScanRule = {
   },
 };
 
+// ─── SF-MA-007: CrewAI Hierarchical Process Without Limits ──────
+
+export const crewaiHierarchicalNoLimits: ScanRule = {
+  id: "SF-MA-007",
+  name: "CrewAI: Hierarchical Process Without Delegation Limits",
+  description: "CrewAI crew uses hierarchical process with a manager agent that can delegate tasks to workers, who may further delegate — creating recursive chains without depth limits.",
+  category: "multi_agent",
+  severity: "high",
+  frameworks: ["crewai"],
+  compliance: [
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM06", description: "Excessive Agency via hierarchical delegation" },
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM10", description: "Unbounded Consumption from recursive delegation" },
+    { framework: "EU_AI_ACT" as const, reference: "Article 9", description: "Risk management for multi-agent systems" },
+  ],
+  phase: "static",
+  lifecycle: "stable",
+  since: "0.2.0",
+  auto_fix: {
+    description: "Add max_delegation_depth or set allow_delegation: false on worker agents in crew.yaml.",
+    suggested_config: "researcher:\n  role: Senior Researcher\n  allow_delegation: false  # Prevent recursive delegation",
+  },
+  known_false_positives: [
+    {
+      condition: "Small crews (2-3 agents) where delegation is intentionally flat",
+      recommended_action: "Suppress with: # sentinelflow-ignore: SF-MA-007 -- Flat crew, 2 agents only",
+    },
+  ],
+  framework_compat: [{ framework: "crewai", min_version: "0.30.0" }],
+
+  evaluate(ctx: RuleContext): EnterpriseFinding[] {
+    const findings: EnterpriseFinding[] = [];
+
+    for (const file of ctx.config_files) {
+      if (!file.path.match(/crew\.ya?ml$|agents\.ya?ml$/)) continue;
+
+      const hasHierarchical = /process:\s*["']?hierarchical["']?/i.test(file.content);
+      if (!hasHierarchical) continue;
+
+      const delegatingAgents = ctx.agents.filter(
+        (a) => a.framework === "crewai" && a.delegates_to && a.delegates_to.length > 0
+      );
+
+      if (delegatingAgents.length > 0) {
+        const line = file.content.substring(0, file.content.indexOf("hierarchical")).split("\n").length;
+        findings.push(createEnterpriseFinding(this, {
+          id: `${this.id}-${findings.length}`,
+          title: "CrewAI hierarchical process with unrestricted delegation",
+          description:
+            `Crew uses hierarchical process with ${delegatingAgents.length} agent(s) that can delegate ` +
+            `(${delegatingAgents.map(a => a.name).join(", ")}). In hierarchical mode, the manager agent ` +
+            "delegates to workers who may further delegate, creating recursive chains that consume " +
+            "tokens unboundedly and can escalate privileges through delegation.",
+          recommendation:
+            "Set allow_delegation: false on worker agents that should not sub-delegate. " +
+            "Only the manager agent should have delegation privileges in a hierarchical crew. " +
+            "See https://sentinelflow.dev/rules/SF-MA-007",
+          location: { file: file.path, line, snippet: "process: hierarchical" },
+          remediation_effort: "low",
+          auto_fix: this.auto_fix,
+        }));
+      }
+    }
+    return findings;
+  },
+};
+
+// ─── SF-MA-008: Multi-Framework Config Drift ────────────────────
+
+export const multiFrameworkConfigDrift: ScanRule = {
+  id: "SF-MA-008",
+  name: "Multi-Framework: Permission Scope Divergence",
+  description: "Multiple agent frameworks configured in the same repository have divergent permission scopes — the least restrictive configuration determines actual risk.",
+  category: "multi_agent",
+  severity: "medium",
+  frameworks: "all",
+  compliance: [
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM06", description: "Excessive Agency via inconsistent permissions" },
+    { framework: "EU_AI_ACT" as const, reference: "Article 15", description: "Consistent cybersecurity measures" },
+    { framework: "NIST_AI_RMF" as const, reference: "GOVERN 1.1", description: "Uniform governance policies" },
+  ],
+  phase: "static",
+  lifecycle: "experimental",
+  since: "0.2.0",
+  known_false_positives: [
+    {
+      condition: "Intentionally different permission scopes for different frameworks (e.g., Cursor for review-only, Claude Code for development)",
+      recommended_action: "Suppress with: # sentinelflow-ignore: SF-MA-008 -- Intentional scope difference documented in SECURITY.md",
+    },
+  ],
+
+  evaluate(ctx: RuleContext): EnterpriseFinding[] {
+    const findings: EnterpriseFinding[] = [];
+
+    const frameworkSet = new Set(ctx.agents.map((a) => a.framework));
+    if (frameworkSet.size < 2) return findings;
+
+    const frameworkToolRisks = new Map<string, Set<string>>();
+    for (const agent of ctx.agents) {
+      if (!frameworkToolRisks.has(agent.framework)) {
+        frameworkToolRisks.set(agent.framework, new Set());
+      }
+      const riskSet = frameworkToolRisks.get(agent.framework)!;
+      for (const tool of agent.tools) {
+        if (tool.risk_level === "high") riskSet.add(tool.name);
+      }
+    }
+
+    const withHighRisk: string[] = [];
+    const withoutHighRisk: string[] = [];
+    for (const [fw, risks] of frameworkToolRisks) {
+      if (risks.size > 0) withHighRisk.push(fw);
+      else withoutHighRisk.push(fw);
+    }
+
+    if (withHighRisk.length > 0 && withoutHighRisk.length > 0) {
+      findings.push(createEnterpriseFinding(this, {
+        id: `${this.id}-0`,
+        title: "Permission scope divergence across frameworks",
+        description:
+          `This project configures ${frameworkSet.size} agent frameworks with different permission levels. ` +
+          `${withHighRisk.join(", ")} grant(s) high-risk tool access (bash, shell, code execution) ` +
+          `while ${withoutHighRisk.join(", ")} do(es) not. The least restrictive configuration ` +
+          "determines the project's actual risk surface.",
+        recommendation:
+          "Align permission scopes across all configured frameworks to the principle of least privilege. " +
+          "If different scopes are intentional, document the rationale in SECURITY.md and suppress this finding. " +
+          "See https://sentinelflow.dev/rules/SF-MA-008",
+        remediation_effort: "medium",
+      }));
+    }
+
+    return findings;
+  },
+};
+
 export const MULTI_AGENT_RULES: ScanRule[] = [
   noDelegationDepthLimit,
   privilegeEscalationViaDelegate,
   noOutputValidationBetweenAgents,
+  crewaiHierarchicalNoLimits,
+  multiFrameworkConfigDrift,
 ];

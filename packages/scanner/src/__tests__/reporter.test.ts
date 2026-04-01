@@ -105,7 +105,7 @@ describe("formatSARIF", () => {
   it("includes all 41 rule definitions", () => {
     const output = formatSARIF(makeScanResult());
     const parsed = JSON.parse(output);
-    expect(parsed.runs[0].tool.driver.rules.length).toBe(41);
+    expect(parsed.runs[0].tool.driver.rules.length).toBe(46);
   });
 
   it("maps severity to SARIF levels correctly", () => {

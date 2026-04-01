@@ -23,8 +23,8 @@ function evalRule(ruleId: string, context: RuleContext): EnterpriseFinding[] {
 // ─── Rule Registry ──────────────────────────────────────────────
 
 describe("Rule Registry", () => {
-  it("has 41 built-in rules", () => {
-    expect(BUILT_IN_RULES.length).toBe(41);
+  it("has 46 built-in rules", () => {
+    expect(BUILT_IN_RULES.length).toBe(46);
   });
 
   it("has 10 categories", () => {

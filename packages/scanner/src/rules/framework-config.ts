@@ -259,6 +259,131 @@ export const noDescription: ScanRule = {
   },
 };
 
+// ─── SF-FC-008: Codex Full-Auto Mode ────────────────────────────
+
+export const codexFullAutoMode: ScanRule = {
+  id: "SF-FC-008",
+  name: "Codex CLI: Full-Auto Mode Enabled",
+  description: "Codex CLI approval_mode is set to 'full-auto', granting the agent unrestricted code execution and file modification without human approval.",
+  category: "framework_config",
+  severity: "critical",
+  frameworks: ["codex"],
+  compliance: [
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM06", description: "Excessive Agency — no approval gates" },
+    { framework: "EU_AI_ACT" as const, reference: "Article 14", description: "Human oversight requirement" },
+    { framework: "NIST_AI_RMF" as const, reference: "MANAGE 2.4", description: "Override mechanisms absent" },
+  ],
+  phase: "static",
+  lifecycle: "stable",
+  since: "0.2.0",
+  auto_fix: {
+    description: "Change approval_mode from 'full-auto' to 'suggest' or 'auto-edit' in .codex/config.toml.",
+    find: 'approval_mode = "full-auto"',
+    replace: 'approval_mode = "suggest"',
+    suggested_config: 'model = "o4-mini"\napproval_mode = "suggest"',
+  },
+  known_false_positives: [
+    {
+      condition: "Sandboxed CI/CD environment with ephemeral compute and no production access",
+      recommended_action: "Suppress with: # sentinelflow-ignore: SF-FC-008 -- CI sandbox per SEC-XXXX",
+    },
+  ],
+  framework_compat: [{ framework: "codex", min_version: "0.1.0" }],
+
+  evaluate(ctx: RuleContext): EnterpriseFinding[] {
+    const findings: EnterpriseFinding[] = [];
+    for (const file of ctx.config_files) {
+      if (!file.path.includes(".codex") && !file.path.endsWith("config.toml")) continue;
+
+      const autoMatch = file.content.match(/approval_mode\s*=\s*["']full-auto["']/);
+      if (autoMatch) {
+        const line = file.content.substring(0, autoMatch.index ?? 0).split("\n").length;
+        findings.push(createEnterpriseFinding(this, {
+          id: `${this.id}-${findings.length}`,
+          title: "Codex CLI running in full-auto mode",
+          description:
+            "The approval_mode is set to 'full-auto' in .codex/config.toml. This grants " +
+            "the Codex agent unrestricted ability to execute code, modify files, and run " +
+            "shell commands without any human confirmation. This is equivalent to Claude Code's " +
+            "--dangerously-skip-permissions flag.",
+          recommendation:
+            'Change approval_mode to "suggest" (safest) or "auto-edit" (allows file edits ' +
+            "but requires approval for shell commands) in .codex/config.toml. " +
+            "See https://sentinelflow.dev/rules/SF-FC-008",
+          location: { file: file.path, line, snippet: 'approval_mode = "full-auto"' },
+          cwe: "CWE-862",
+          remediation_effort: "low",
+          auto_fix: this.auto_fix,
+        }));
+      }
+    }
+    return findings;
+  },
+};
+
+// ─── SF-FC-009: Cursor AlwaysApply with Broad Globs ─────────────
+
+export const cursorAlwaysApplyBroadGlob: ScanRule = {
+  id: "SF-FC-009",
+  name: "Cursor: AlwaysApply Rule with Broad Glob Pattern",
+  description: "A Cursor .mdc rule file uses alwaysApply: true with a broad glob pattern (e.g., '**/*'), silently injecting instructions into every agent interaction without user review.",
+  category: "framework_config",
+  severity: "high",
+  frameworks: ["cursor"],
+  compliance: [
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM01", description: "Prompt Injection via auto-applied rules" },
+    { framework: "OWASP_LLM_2025" as const, reference: "LLM06", description: "Excessive Agency — unreviewed rule injection" },
+    { framework: "EU_AI_ACT" as const, reference: "Article 14", description: "Human oversight bypassed by auto-apply" },
+  ],
+  phase: "static",
+  lifecycle: "stable",
+  since: "0.2.0",
+  auto_fix: {
+    description: "Change alwaysApply to false and use specific glob patterns instead of **/*.",
+    find: "alwaysApply: true",
+    replace: "alwaysApply: false",
+  },
+  known_false_positives: [
+    {
+      condition: "Project-wide coding standards (formatting, language preferences) that are intentionally global",
+      recommended_action: "Suppress with: # sentinelflow-ignore: SF-FC-009 -- Global coding standard, reviewed by team",
+    },
+  ],
+  framework_compat: [{ framework: "cursor" }],
+
+  evaluate(ctx: RuleContext): EnterpriseFinding[] {
+    const findings: EnterpriseFinding[] = [];
+    for (const file of ctx.config_files) {
+      if (!file.path.endsWith(".mdc")) continue;
+
+      const hasAlwaysApply = /alwaysApply:\s*true/i.test(file.content);
+      const hasBroadGlob = /globs:\s*["']?\*\*\/?\*["']?/i.test(file.content) ||
+                           /globs:\s*["']?\*["']?\s*$/m.test(file.content);
+
+      if (hasAlwaysApply && hasBroadGlob) {
+        findings.push(createEnterpriseFinding(this, {
+          id: `${this.id}-${findings.length}`,
+          title: `Cursor rule auto-applies to all files: ${file.path}`,
+          description:
+            "This .mdc rule uses alwaysApply: true with a glob pattern matching all files. " +
+            "The rule's instructions are silently injected into every Cursor interaction " +
+            "without user review. A malicious or overly broad rule here effectively becomes " +
+            "a persistent prompt injection vector — especially dangerous in shared repos.",
+          recommendation:
+            "Set alwaysApply: false and use specific glob patterns (e.g., '**/*.ts' " +
+            "instead of '**/*'). Review the rule content for any tool access or behavioral " +
+            "instructions that should require explicit user activation. " +
+            "See https://sentinelflow.dev/rules/SF-FC-009",
+          location: { file: file.path, snippet: "alwaysApply: true" },
+          remediation_effort: "low",
+          auto_fix: this.auto_fix,
+        }));
+      }
+    }
+    return findings;
+  },
+};
+
 export const FRAMEWORK_CONFIG_RULES: ScanRule[] = [
   dangerouslySkipPermissions,
   wildcardBashPermissions,
@@ -266,4 +391,6 @@ export const FRAMEWORK_CONFIG_RULES: ScanRule[] = [
   unsafeDeserialization,
   unrestrictedDelegation,
   noDescription,
+  codexFullAutoMode,
+  cursorAlwaysApplyBroadGlob,
 ];
