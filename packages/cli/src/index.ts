@@ -34,9 +34,11 @@ program
   .command("scan")
   .description("Scan for AI agents and governance issues")
   .argument("[path]", "Project directory to scan", ".")
-  .option("-f, --format <format>", "Output format: terminal, json, md", "terminal")
+  .option("-f, --format <format>", "Output format: terminal, json, md, sarif", "terminal")
   .option("--min-severity <severity>", "Minimum severity: critical, high, medium, low, info")
   .option("--rules <rules>", "Comma-separated rule IDs to run")
+  .option("--preset <preset>", "Scan preset: strict, standard, monitor", "standard")
+  .option("--show-suppressed", "Show suppressed findings for audit review")
   .option("--no-registry", "Skip updating the local registry")
   .action(scanCommand);
 

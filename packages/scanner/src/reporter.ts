@@ -122,10 +122,7 @@ export function formatTerminal(result: ScanResult): string {
 
   // Footer
   lines.push(
-    `  ${DIM}Scan completed in ${report.duration_ms}ms${RESET}`
-  );
-  lines.push(
-    `  ${DIM}Registry updated: ${agents.length} agents in .sentinelflow/${RESET}`
+    `  ${DIM}Scan completed in ${report.duration_ms}ms | 46 rules | ${agents.length} agents${RESET}`
   );
   lines.push("");
 
@@ -277,6 +274,19 @@ export function formatMarkdown(result: ScanResult): string {
       }
     }
   }
+
+  // Coverage footer
+  lines.push("## Coverage");
+  lines.push("");
+  lines.push(`Static analysis of ${agents.length} agent definition(s). The following require runtime context and are **not covered** by this scan:`);
+  lines.push("");
+  lines.push("- IAM roles and cloud permissions");
+  lines.push("- Secrets injected via Vault or environment variables");
+  lines.push("- Network policies and service mesh configuration");
+  lines.push("- Feature flags gating agent capabilities");
+  lines.push("");
+  lines.push("See [Framework Support Matrix](https://sentinelflow.dev/docs/framework-support) for full coverage details.");
+  lines.push("");
 
   return lines.join("\n");
 }
