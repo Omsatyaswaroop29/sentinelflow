@@ -1,0 +1,27 @@
+{
+  "name": "@sentinelflow/core",
+  "version": "0.1.0",
+  "description": "Core schemas, types, and registry for SentinelFlow",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/uuid": "^10.0.0",
+    "vitest": "^2.1.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,59 @@
+# SentinelFlow Policy File
+# Place this at your project root as .sentinelflow-policy.yaml
+#
+# Docs: https://sentinelflow.dev/docs/policy-file
+# This file controls how SentinelFlow scans your project:
+#   - Suppress specific findings with mandatory justification + audit trail
+#   - Override rule severity per-project
+#   - Exclude directories from scanning
+#   - Set the default scan preset
+
+version: v1
+
+# Default preset: strict | standard | monitor
+# Can be overridden by CLI: sentinelflow scan --preset strict
+preset: standard
+
+# ─── Suppressions ────────────────────────────────────────────
+# Every suppression MUST have a reason. Suppressions without
+# justification are flagged as warnings.
+#
+# Fields:
+#   path:        File glob pattern (optional — omit to suppress globally)
+#   reason:      Why this suppression is acceptable (REQUIRED)
+#   expires:     ISO date — suppression auto-expires (recommended)
+#   approved_by: Who approved this (recommended for audit)
+#   ticket:      Jira/Linear/GitHub issue reference (recommended)
+
+ignore:
+  SF-FC-001:
+    - path: ".claude/settings.json"
+      reason: "CI sandbox environment with ephemeral compute, no production access"
+      expires: "2026-10-01"
+      approved_by: "security-team"
+      ticket: "SEC-1294"
+
+  SF-CG-001:
+    - reason: "Token budgets managed externally by API gateway rate limiting"
+      approved_by: "platform-team"
+      ticket: "PLAT-892"
+
+# ─── Severity Overrides ─────────────────────────────────────
+# Adjust rule severity for this project.
+# Valid values: critical | high | medium | low | info
+
+severity_overrides:
+  SF-CG-004: low        # Model cost is managed at org level, not project
+  SF-CD-001: info       # Risk assessment in progress, tracking via COMP-421
+
+# ─── Exclude Patterns ───────────────────────────────────────
+# Glob patterns for files/directories to skip entirely.
+# Uses .gitignore-compatible syntax.
+
+exclude:
+  - "test/**"
+  - "tests/**"
+  - "examples/**"
+  - "docs/**"
+  - "*.test.yaml"
+  - "*.example.json"

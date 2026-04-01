@@ -1,0 +1,49 @@
+# SentinelFlow Policy File
+# Drop this into your project root to tune scanning behavior.
+# Docs: https://sentinelflow.dev/docs/policy
+version: v1
+
+# ─── Scan Preset ─────────────────────────────────────────────
+# strict:   CI fails on medium and above (production governance)
+# standard: CI fails on high and above (default, active development)
+# monitor:  CI never fails (adoption/baselining mode)
+preset: standard
+
+# ─── Severity Overrides ──────────────────────────────────────
+# Override the default severity of specific rules for your project.
+# Example: downgrade a rule for staging, upgrade one after an incident.
+severity_overrides:
+  SF-CG-001: low
+  SF-CD-001: info
+
+# ─── File Exclusions ─────────────────────────────────────────
+# Glob patterns for files/directories to skip entirely.
+# Useful for test fixtures, documentation examples, vendor code.
+exclude:
+  - "test/**"
+  - "tests/**"
+  - "examples/**"
+  - "docs/**"
+  - "*.test.yaml"
+  - "vendor/**"
+
+# ─── Rule Suppressions ──────────────────────────────────────
+# Suppress specific findings with mandatory justification.
+# Every suppression becomes auditable evidence in scan reports.
+#
+# Required fields: reason
+# Optional fields: path, expires, approved_by, ticket
+#
+# Suppressions without a reason are ignored.
+# Expired suppressions resurface automatically.
+ignore:
+  SF-AC-001:
+    - path: "agents/legacy-processor.yaml"
+      reason: "Legacy agent being decommissioned Q2 2026"
+      expires: "2026-07-01"
+      approved_by: "security-team"
+      ticket: "SEC-1294"
+  SF-CG-001:
+    - reason: "Token budgets managed by platform-level rate limiting"
+      approved_by: "platform-team"
+      ticket: "PLAT-892"

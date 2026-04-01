@@ -1,0 +1,5 @@
+---
+description: TypeScript rules
+globs: "**/*.ts"
+---
+Use strict TypeScript. No any types.

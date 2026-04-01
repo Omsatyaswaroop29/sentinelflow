@@ -1,0 +1,113 @@
+name: Corpus & Self-Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Run weekly on Monday 6am UTC against real-world repos
+    - cron: '0 6 * * 1'
+
+jobs:
+  corpus-test:
+    name: Corpus Tests (fixture projects)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm test
+        env:
+          NODE_ENV: test
+
+  self-scan:
+    name: SentinelFlow Self-Scan
+    runs-on: ubuntu-latest
+    needs: corpus-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      # Self-scan: SentinelFlow scans its own config
+      - name: Self-scan (SARIF output)
+        run: node packages/cli/dist/index.js scan . --format sarif > self-scan.sarif
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: self-scan.sarif
+          category: sentinelflow-self-scan
+      # Self-scan: terminal output for PR review
+      - name: Self-scan (terminal output)
+        run: node packages/cli/dist/index.js scan .
+
+  real-world-corpus:
+    name: Real-World Corpus (${{ matrix.repo }})
+    runs-on: ubuntu-latest
+    needs: corpus-test
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: affaan-m/everything-claude-code
+            framework: claude-code
+            min_agents: 25
+          - repo: sanjeed5/awesome-cursor-rules-mdc
+            framework: cursor
+            min_agents: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - name: Clone ${{ matrix.repo }}
+        run: git clone --depth 1 https://github.com/${{ matrix.repo }}.git /tmp/corpus-target
+      - name: Scan ${{ matrix.repo }}
+        run: |
+          echo "=== Scanning ${{ matrix.repo }} ==="
+          node packages/cli/dist/index.js scan /tmp/corpus-target --format json > /tmp/scan-result.json
+          echo ""
+          echo "=== Results ==="
+          node -e "
+            const r = require('/tmp/scan-result.json');
+            console.log('Agents discovered:', r.agents_discovered);
+            console.log('Findings:', JSON.stringify(r.summary));
+            console.log('Frameworks:', r.frameworks_detected.join(', '));
+            if (r.agents_discovered < ${{ matrix.min_agents }}) {
+              console.error('FAIL: Expected at least ${{ matrix.min_agents }} agents');
+              process.exit(1);
+            }
+          "
+      - name: Upload SARIF
+        if: always()
+        run: node packages/cli/dist/index.js scan /tmp/corpus-target --format sarif > corpus-${{ matrix.framework }}.sarif
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-scan-${{ matrix.framework }}
+          path: corpus-${{ matrix.framework }}.sarif

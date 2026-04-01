@@ -1,0 +1,115 @@
+{
+  "$schema": "./corpus-schema.json",
+  "description": "Real-world repositories that SentinelFlow CI parses on every commit. If any parser crashes or finding counts fall outside expected ranges, the build fails.",
+  "repos": [
+    {
+      "name": "everything-claude-code",
+      "url": "https://github.com/affaan-m/everything-claude-code",
+      "branch": "main",
+      "frameworks": ["claude-code", "cursor", "codex", "custom"],
+      "expectations": {
+        "min_agents": 25,
+        "max_agents": 40,
+        "min_findings": 80,
+        "max_findings": 200,
+        "zero_crashes": true,
+        "max_critical_false_positives": 0
+      },
+      "notes": "Primary validation target. 116K+ stars, 28 specialized agents, cross-platform configs."
+    },
+    {
+      "name": "sentinelflow-self",
+      "url": "local",
+      "branch": "main",
+      "frameworks": ["claude-code"],
+      "expectations": {
+        "min_agents": 0,
+        "max_agents": 5,
+        "min_findings": 0,
+        "max_findings": 10,
+        "zero_crashes": true,
+        "max_critical_false_positives": 0,
+        "max_critical_findings": 0
+      },
+      "notes": "Self-scan. SentinelFlow's own config must produce zero critical findings."
+    }
+  ],
+  "local_fixtures": [
+    {
+      "name": "fixture-claude-code-basic",
+      "path": "tests/corpus/fixtures/claude-code-basic",
+      "frameworks": ["claude-code"],
+      "expectations": {
+        "min_agents": 2,
+        "max_agents": 4,
+        "min_findings": 3,
+        "max_findings": 10,
+        "zero_crashes": true,
+        "must_find_rules": ["SF-AC-001", "SF-FC-001"],
+        "must_not_find_rules": []
+      }
+    },
+    {
+      "name": "fixture-cursor-mdc",
+      "path": "tests/corpus/fixtures/cursor-mdc",
+      "frameworks": ["cursor"],
+      "expectations": {
+        "min_agents": 1,
+        "max_agents": 5,
+        "min_findings": 1,
+        "max_findings": 8,
+        "zero_crashes": true
+      }
+    },
+    {
+      "name": "fixture-langchain-agent",
+      "path": "tests/corpus/fixtures/langchain-agent",
+      "frameworks": ["langchain"],
+      "expectations": {
+        "min_agents": 1,
+        "max_agents": 3,
+        "min_findings": 2,
+        "max_findings": 10,
+        "zero_crashes": true
+      }
+    },
+    {
+      "name": "fixture-crewai-crew",
+      "path": "tests/corpus/fixtures/crewai-crew",
+      "frameworks": ["crewai"],
+      "expectations": {
+        "min_agents": 2,
+        "max_agents": 5,
+        "min_findings": 1,
+        "max_findings": 8,
+        "zero_crashes": true,
+        "must_find_rules": ["SF-MA-001"]
+      }
+    },
+    {
+      "name": "fixture-multi-framework",
+      "path": "tests/corpus/fixtures/multi-framework",
+      "frameworks": ["claude-code", "cursor", "codex"],
+      "expectations": {
+        "min_agents": 3,
+        "max_agents": 8,
+        "min_findings": 5,
+        "max_findings": 20,
+        "zero_crashes": true
+      }
+    },
+    {
+      "name": "fixture-malformed-configs",
+      "path": "tests/corpus/fixtures/malformed",
+      "frameworks": [],
+      "expectations": {
+        "min_agents": 0,
+        "max_agents": 2,
+        "min_findings": 0,
+        "max_findings": 5,
+        "zero_crashes": true
+      },
+      "notes": "Broken YAML, invalid JSON, empty files, binary garbage. Parsers must not crash."
+    }
+  ]
+}

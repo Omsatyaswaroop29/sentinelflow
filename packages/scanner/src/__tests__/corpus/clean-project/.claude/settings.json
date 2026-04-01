@@ -1,0 +1,8 @@
+{
+  "allowedTools": [
+    "Read",
+    "Bash(npm test)",
+    "Bash(npm run build)",
+    "Bash(git diff)"
+  ]
+}

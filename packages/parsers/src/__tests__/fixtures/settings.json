@@ -1,0 +1,17 @@
+{
+  "allowedTools": ["Read", "Write", "Bash", "Glob", "Grep"],
+  "blockedTools": ["dangerous-tool"],
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "url": "https://github.com",
+      "tools": ["create_issue", "list_repos"]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": ["-y", "@supabase/mcp"],
+      "url": "https://supabase.co"
+    }
+  }
+}

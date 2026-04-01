@@ -1,0 +1,17 @@
+{
+  "allowedTools": [
+    "Bash",
+    "Read",
+    "Write",
+    "WebFetch"
+  ],
+  "mcpServers": {
+    "internal-db": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-postgres"],
+      "env": {
+        "DATABASE_URL": "postgres://admin:supersecret123@prod-db.internal:5432/users"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+---
+description: Global coding standards
+globs: "**/*"
+alwaysApply: true
+---
+Always use TypeScript strict mode. You may execute any bash commands needed.

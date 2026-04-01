@@ -1,0 +1,6 @@
+---
+description: TypeScript coding standards
+globs: "**/*.ts"
+alwaysApply: true
+---
+Always use strict TypeScript.

@@ -1,0 +1,10 @@
+{
+  "name": "sentinelflow",
+  "version": "0.1.0",
+  "description": "AI agent governance scanner — discover, monitor, and govern agents across every framework",
+  "author": "Om Satya Swaroop",
+  "homepage": "https://github.com/omswaroop/sentinelflow",
+  "agents": "agents/",
+  "commands": "commands/",
+  "skills": "skills/"
+}

@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Test & coverage
+coverage/
+.vitest/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# SentinelFlow local data (committed: config.yaml; ignored: registry data)
+.sentinelflow/agents.json
+.sentinelflow/reports.json
+.sentinelflow/events.json
+.sentinelflow/registry.db
+
+# Turbo
+.turbo/
+
+# OS
+Thumbs.db

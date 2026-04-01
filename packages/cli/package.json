@@ -1,0 +1,41 @@
+{
+  "name": "sentinelflow",
+  "version": "0.1.0",
+  "description": "The vendor-neutral governance layer for enterprise AI agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sentinelflow": "dist/index.js"
+  },
+  "license": "MIT",
+  "files": ["dist"],
+  "keywords": [
+    "ai",
+    "agents",
+    "governance",
+    "security",
+    "observability",
+    "claude-code",
+    "langchain",
+    "llm",
+    "compliance",
+    "eu-ai-act"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@sentinelflow/core": "workspace:*",
+    "@sentinelflow/parsers": "workspace:*",
+    "@sentinelflow/scanner": "workspace:*",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "typescript": "^5.7.0"
+  }
+}

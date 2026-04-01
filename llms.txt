@@ -1,0 +1,36 @@
+# SentinelFlow
+
+> The vendor-neutral governance layer for enterprise AI agents.
+
+SentinelFlow discovers, monitors, and governs AI agents across every framework — Claude Code, Cursor, Codex, LangChain, CrewAI, Copilot Studio, and beyond.
+
+## Core Capabilities
+
+- **Agent Discovery**: Auto-detect agents from Claude Code, Cursor, Codex, LangChain, CrewAI configs
+- **Security Scanning**: 9 governance rules across 5 categories (secrets, permissions, guardrails, git safety, identity)
+- **Agent Registry**: Universal schema cataloging every agent with ownership, tools, data access, and compliance status
+- **Runtime Monitoring** (Phase 2): Interceptor SDK for real-time agent telemetry and anomaly detection
+- **Compliance Packs** (Phase 3): EU AI Act, SOC 2, ISO 42001 automated compliance documentation
+
+## Architecture
+
+Monorepo with independently installable packages:
+- @sentinelflow/core — Agent schema, registry, types
+- @sentinelflow/parsers — Framework-specific config parsers
+- @sentinelflow/scanner — Static analysis rules engine
+- @sentinelflow/interceptors — Runtime monitoring SDK
+- sentinelflow — CLI tool
+
+## Quick Start
+
+```bash
+npx sentinelflow scan           # Scan current directory
+npx sentinelflow scan --format json  # JSON output for CI
+npx sentinelflow init           # Initialize governance config
+```
+
+## Links
+
+- Repository: https://github.com/omswaroop/sentinelflow
+- Issues: https://github.com/omswaroop/sentinelflow/issues
+- License: MIT

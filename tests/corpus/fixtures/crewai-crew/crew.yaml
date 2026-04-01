@@ -1,0 +1,9 @@
+researcher:
+  role: Senior Research Analyst
+  goal: Find information
+  tools: [SerperDevTool, ScrapeWebsiteTool]
+  allow_delegation: true
+writer:
+  role: Content Writer
+  goal: Write articles
+  allow_delegation: true

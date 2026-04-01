@@ -1,0 +1,31 @@
+{
+  "name": "sentinelflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The vendor-neutral governance layer for enterprise AI agents",
+  "author": "Om Satya Swaroop",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/omswaroop/sentinelflow"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "clean": "turbo clean",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.4.0",
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

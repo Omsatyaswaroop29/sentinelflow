@@ -1,0 +1,7 @@
+{
+  "allowedTools": [
+    "Read",
+    "Write",
+    "Bash(npm test)"
+  ]
+}

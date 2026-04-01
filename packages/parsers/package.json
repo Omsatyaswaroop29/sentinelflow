@@ -1,0 +1,25 @@
+{
+  "name": "@sentinelflow/parsers",
+  "version": "0.1.0",
+  "description": "Framework-specific agent configuration parsers",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@sentinelflow/core": "workspace:*",
+    "yaml": "^2.7.0",
+    "toml": "^3.0.0",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "typescript": "^5.7.0"
+  }
+}
