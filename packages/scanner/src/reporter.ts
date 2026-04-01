@@ -41,7 +41,7 @@ export function formatTerminal(result: ScanResult): string {
   // Header
   lines.push("");
   lines.push(
-    `  ${BOLD}${CYAN}SentinelFlow v0.1.0${RESET} ${DIM}— Agent Governance Scanner${RESET}`
+    `  ${BOLD}${CYAN}SentinelFlow v0.2.0${RESET} ${DIM}— Agent Governance Scanner${RESET}`
   );
   lines.push("");
   lines.push(`  Scanning ${BOLD}${report.root_dir}${RESET}...`);
@@ -149,8 +149,8 @@ export function formatSARIF(result: ScanResult): string {
         tool: {
           driver: {
             name: "SentinelFlow",
-            version: "0.1.0",
-            informationUri: "https://github.com/omswaroop/sentinelflow",
+            version: "0.2.0",
+            informationUri: "https://github.com/Omsatyaswaroop29/sentinelflow",
             rules: BUILT_IN_RULES.map((rule) => ({
               id: rule.id,
               name: rule.name,

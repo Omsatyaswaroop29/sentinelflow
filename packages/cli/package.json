@@ -1,25 +1,41 @@
 {
   "name": "sentinelflow",
-  "version": "0.1.0",
-  "description": "The vendor-neutral governance layer for enterprise AI agents",
+  "version": "0.2.0",
+  "description": "The vendor-neutral governance scanner for AI agents. Scans Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro configs for security and compliance issues.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "sentinelflow": "dist/index.js"
   },
   "license": "MIT",
+  "author": "Om Satya Swaroop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Omsatyaswaroop29/sentinelflow.git"
+  },
+  "homepage": "https://github.com/Omsatyaswaroop29/sentinelflow#readme",
+  "bugs": {
+    "url": "https://github.com/Omsatyaswaroop29/sentinelflow/issues"
+  },
   "files": ["dist"],
   "keywords": [
     "ai",
-    "agents",
+    "ai-agents",
     "governance",
     "security",
-    "observability",
+    "scanner",
     "claude-code",
+    "cursor",
+    "codex",
     "langchain",
+    "crewai",
     "llm",
     "compliance",
-    "eu-ai-act"
+    "eu-ai-act",
+    "owasp",
+    "sarif",
+    "sast",
+    "devsecops"
   ],
   "scripts": {
     "build": "tsc",

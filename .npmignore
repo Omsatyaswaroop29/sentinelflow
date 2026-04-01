@@ -1,0 +1,38 @@
+# Source files (dist/ is what ships)
+src/
+*.ts
+!*.d.ts
+tsconfig.json
+tsconfig.base.json
+
+# Tests
+__tests__/
+*.test.ts
+*.test.js
+*.spec.ts
+vitest.config.*
+
+# Dev tooling
+.turbo/
+turbo.json
+.github/
+.claude/
+scripts/
+pnpm-workspace.yaml
+pnpm-lock.yaml
+
+# Docs (available on GitHub, not needed in npm package)
+docs/
+examples/
+AGENTS.md
+CLAUDE.md
+llms.txt
+install.sh
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
