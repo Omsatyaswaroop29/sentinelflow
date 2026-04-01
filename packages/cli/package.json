@@ -1,11 +1,11 @@
 {
   "name": "sentinelflow",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "description": "The vendor-neutral governance scanner for AI agents. Scans Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro configs for security and compliance issues.",
-  "main": "dist/index.js",
+  "main": "dist/bundle.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "sentinelflow": "dist/index.js"
+    "sentinelflow": "dist/bundle.js"
   },
   "license": "MIT",
   "author": "Om Satya Swaroop",
@@ -38,17 +38,15 @@
     "devsecops"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node ../../scripts/bundle.js",
     "dev": "tsc --watch",
     "test": "vitest run",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@sentinelflow/core": "workspace:*",
-    "@sentinelflow/parsers": "workspace:*",
-    "@sentinelflow/scanner": "workspace:*",
-    "commander": "^13.0.0"
+    "commander": "^13.0.0",
+    "better-sqlite3": "^11.8.0"
   },
   "devDependencies": {
     "vitest": "^2.1.0",
