@@ -21,6 +21,12 @@
 import { Command } from "commander";
 import { scanCommand } from "./commands/scan";
 import { initCommand } from "./commands/init";
+import {
+  interceptInstallCommand,
+  interceptUninstallCommand,
+  interceptStatusCommand,
+  interceptTailCommand,
+} from "./commands/intercept";
 
 const program = new Command();
 
@@ -48,6 +54,41 @@ program
   .description("Initialize SentinelFlow in the current project")
   .argument("[path]", "Project directory", ".")
   .action(initCommand);
+
+// ── sentinelflow intercept ───────────────────────────────────
+const intercept = program
+  .command("intercept")
+  .description("Runtime agent firewall — install/manage runtime hooks");
+
+intercept
+  .command("install")
+  .description("Install runtime governance hooks into a project")
+  .argument("[path]", "Project directory", ".")
+  .option("--mode <mode>", "Enforcement mode: monitor, enforce", "monitor")
+  .option("--blocklist <tools>", "Comma-separated tools to block")
+  .option("--allowlist <tools>", "Comma-separated tools to allow (blocks all others)")
+  .option("--budget <usd>", "Max cost per session in USD")
+  .action(interceptInstallCommand);
+
+intercept
+  .command("uninstall")
+  .description("Remove runtime hooks from a project")
+  .argument("[path]", "Project directory", ".")
+  .action(interceptUninstallCommand);
+
+intercept
+  .command("status")
+  .description("Check runtime hook status and event log stats")
+  .argument("[path]", "Project directory", ".")
+  .action(interceptStatusCommand);
+
+intercept
+  .command("tail")
+  .description("View recent events from the runtime log")
+  .argument("[path]", "Project directory", ".")
+  .option("-n, --lines <count>", "Number of events to show", "20")
+  .option("-f, --follow", "Follow the log in real-time")
+  .action(interceptTailCommand);
 
 // ── sentinelflow registry ───────────────────────────────────
 const registry = program

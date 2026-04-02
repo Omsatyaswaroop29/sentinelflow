@@ -49,6 +49,7 @@
     "better-sqlite3": "^11.8.0"
   },
   "devDependencies": {
+    "@sentinelflow/interceptors": "workspace:*",
     "vitest": "^2.1.0",
     "typescript": "^5.7.0"
   }

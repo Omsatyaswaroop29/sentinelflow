@@ -3,10 +3,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globals: true,
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["src/**/*.test.ts"],
+    passWithNoTests: true,
     coverage: {
       provider: "v8",
-      include: ["packages/*/src/**/*.ts"],
+      include: ["src/**/*.ts"],
       exclude: ["**/*.test.ts", "**/*.d.ts", "**/index.ts"],
       thresholds: {
         lines: 80,

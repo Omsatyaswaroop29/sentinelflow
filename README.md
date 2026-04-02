@@ -124,6 +124,33 @@ ignore:
 sentinelflow scan . --show-suppressed
 ```
 
+## Runtime Agent Firewall (Phase 2) 🆕
+
+SentinelFlow now goes beyond static scanning. Install runtime hooks that intercept every tool call your AI agent makes — in real-time.
+
+```bash
+# Install hooks into a Claude Code project (monitor mode — logs everything, blocks nothing)
+sentinelflow intercept install . --mode monitor
+
+# Install with enforcement — actually block dangerous tool calls
+sentinelflow intercept install . --mode enforce --blocklist Bash,Write
+
+# Check what's happening
+sentinelflow intercept status .
+
+# Live-tail the event log
+sentinelflow intercept tail . -f
+
+# Remove hooks when done
+sentinelflow intercept uninstall .
+```
+
+**What it intercepts:** Every `PreToolUse` event from Claude Code passes through SentinelFlow's policy engine. Built-in policies catch dangerous bash commands (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`), enforce tool allowlists/blocklists, track cost budgets, and enforce data boundary rules.
+
+**Two modes:** Start with `monitor` to see what your agents are doing without breaking anything. Graduate to `enforce` when you're confident in your policies.
+
+**Event log:** All events are written to `.sentinelflow/events.jsonl` — a simple, grep-able, append-only log you can feed into any analytics pipeline.
+
 ## Frameworks Supported
 
 | Framework | Config Locations | Parser Status |
@@ -161,6 +188,8 @@ SentinelFlow is a monorepo with four packages.
 
 `@sentinelflow/scanner` — 46 governance rules, suppression engine, SARIF/JSON/Markdown/terminal formatters.
 
+`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code, evaluates policies on every tool call, emits events.
+
 `sentinelflow` — CLI that ties it all together. This is the package you install.
 
 ## Validated Against Real Projects
@@ -181,7 +210,7 @@ npx vitest run
 
 ## Roadmap
 
-**Phase 2** (Weeks 7–12) — Runtime interceptors via Claude Code hooks and LangChain callbacks. Anomaly detection for token spend and tool invocation patterns. Live dashboard.
+**Phase 2** (In Progress) — ~~Runtime interceptors via Claude Code hooks~~ ✅. LangChain callbacks. Anomaly detection for token spend and tool invocation patterns. Event store with time-windowed queries. Live dashboard.
 
 **Phase 3** (Months 4–6) — Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK.
 

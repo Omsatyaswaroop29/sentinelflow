@@ -35,19 +35,10 @@ importers:
       commander:
         specifier: ^13.0.0
         version: 13.1.0
-      gray-matter:
-        specifier: ^4.0.3
-        version: 4.0.3
-      toml:
-        specifier: ^3.0.0
-        version: 3.0.0
-      uuid:
-        specifier: ^11.1.0
-        version: 11.1.0
-      yaml:
-        specifier: ^2.7.0
-        version: 2.8.3
     devDependencies:
+      '@sentinelflow/interceptors':
+        specifier: workspace:*
+        version: link:../interceptors
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -70,6 +61,28 @@ importers:
       '@types/uuid':
         specifier: ^10.0.0
         version: 10.0.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.15)
+
+  packages/interceptors:
+    dependencies:
+      '@sentinelflow/core':
+        specifier: workspace:*
+        version: link:../core
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
