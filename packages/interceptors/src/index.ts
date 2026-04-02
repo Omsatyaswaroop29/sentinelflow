@@ -59,6 +59,17 @@ export {
   JsonlFileListener,
   CallbackListener,
   AlertListener,
+  EventStoreListener,
   type AlertChannel,
   type AlertPayload,
 } from "./listeners";
+
+// ─── Anomaly Detection ───────────────────────────────────────────
+export {
+  type AnomalyDetector,
+  NovelToolDetector,
+  CostSpikeDetector,
+  ErrorRateDetector,
+  PrivilegeEscalationDetector,
+  AnomalyEngine,
+} from "./anomaly";

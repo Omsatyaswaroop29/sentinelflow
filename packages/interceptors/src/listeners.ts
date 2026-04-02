@@ -16,6 +16,14 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { AgentEvent } from "@sentinelflow/core";
+import {
+  EventStoreWriter,
+  createGovernanceEvent,
+  type GovernanceEvent,
+  type GovernanceEventType,
+  type EventOutcome,
+  type EventSeverity,
+} from "@sentinelflow/core";
 import type { EventListener } from "./interface";
 
 // ─── 1. Console Listener ────────────────────────────────────────────
@@ -315,5 +323,158 @@ export class AlertListener implements EventListener {
         // Never crash on alert failure
       }
     }
+  }
+}
+
+// ─── 5. Event Store Listener ────────────────────────────────────────
+
+/**
+ * The critical bridge between the interceptor pipeline and the SQLite
+ * event store. Receives AgentEvent objects from the interceptor, converts
+ * them to GovernanceEvent objects (the event store's canonical schema),
+ * and writes them to SQLite via the EventStoreWriter.
+ *
+ * This is what connects the full pipeline:
+ *   Framework → Interceptor → EventStoreListener → SQLite → Query API
+ *
+ * The conversion maps the interceptor's telemetry-oriented AgentEvent
+ * into the event store's governance-oriented GovernanceEvent, including:
+ *   - event type normalization (tool_call_start → tool_call_attempted)
+ *   - outcome classification (success/error/blocked → allowed/error/blocked)
+ *   - severity inference from event type and governance data
+ *   - cost/token extraction from the tokens field
+ *   - payload preservation for drill-down detail
+ */
+export class EventStoreListener implements EventListener {
+  readonly name = "event_store";
+  private _writer: EventStoreWriter;
+  private _framework: string;
+
+  constructor(opts: {
+    /** Path to the project root (where .sentinelflow/ lives) */
+    projectDir: string;
+    /** Framework name to tag events with */
+    framework?: string;
+    /** Custom database path (overrides default .sentinelflow/events.db) */
+    dbPath?: string;
+    /** Flush buffer size. Default: 50 */
+    flushSize?: number;
+  }) {
+    this._framework = opts.framework ?? "unknown";
+    this._writer = new EventStoreWriter({
+      projectDir: opts.projectDir,
+      dbPath: opts.dbPath,
+      flushSize: opts.flushSize,
+    });
+  }
+
+  onEvent(event: AgentEvent): void {
+    const govEvent = this.convertEvent(event);
+    this._writer.ingest(govEvent);
+  }
+
+  async onShutdown(): Promise<void> {
+    // Flush remaining buffered events and compute today's rollup
+    this._writer.flush();
+    try {
+      this._writer.computeTodayRollup();
+    } catch {
+      // Rollup failure is non-fatal
+    }
+    this._writer.close();
+  }
+
+  /** Expose the writer for manual flush/rollup operations */
+  get writer(): EventStoreWriter {
+    return this._writer;
+  }
+
+  /**
+   * Convert an interceptor AgentEvent into a governance GovernanceEvent.
+   *
+   * This is the normalization layer. The interceptor speaks in
+   * telemetry terms (tool_call_start, tool_call_end), while the
+   * event store speaks in governance terms (tool_call_attempted,
+   * tool_call_completed, policy_violation).
+   */
+  private convertEvent(event: AgentEvent): GovernanceEvent {
+    return createGovernanceEvent({
+      event_id: event.id,
+      timestamp: event.timestamp,
+      agent_id: event.agent_id,
+      framework: this._framework,
+      session_id: event.session_id,
+      event_type: this.mapEventType(event),
+      outcome: this.mapOutcome(event),
+      severity: this.mapSeverity(event),
+      tool_name: event.tool?.name,
+      tool_input_summary: event.tool?.input_summary,
+      action: event.tool?.input_summary,
+      policy_id: event.governance?.policies_failed?.[0],
+      policy_name: event.governance?.policies_failed?.[0],
+      reason: event.governance?.reason,
+      prompt_tokens: event.tokens?.input,
+      completion_tokens: event.tokens?.output,
+      cost_usd: event.tokens?.estimated_cost_usd,
+      model: event.tokens?.model,
+      duration_ms: event.tool?.duration_ms,
+      payload: event.metadata as Record<string, unknown> | undefined,
+    });
+  }
+
+  /**
+   * Map interceptor event types to governance event types.
+   * The interceptor uses telemetry-oriented names (tool_call_start),
+   * while the event store uses governance-oriented names (tool_call_attempted).
+   */
+  private mapEventType(event: AgentEvent): GovernanceEventType {
+    switch (event.type) {
+      case "tool_call_start":
+        return "tool_call_attempted";
+      case "tool_call_end":
+        return event.tool?.status === "error"
+          ? "tool_call_failed"
+          : "tool_call_completed";
+      case "tool_call_blocked":
+        return "tool_call_blocked";
+      case "session_start":
+        return "session_started";
+      case "session_end":
+        return "session_ended";
+      case "delegation":
+        return "delegation_spawned";
+      default:
+        return "tool_call_attempted";
+    }
+  }
+
+  /**
+   * Map the interceptor's tool status into a governance outcome.
+   * "blocked" is the most governance-significant outcome — it means
+   * a policy actively prevented an agent action.
+   */
+  private mapOutcome(event: AgentEvent): EventOutcome {
+    if (event.type === "tool_call_blocked") return "blocked";
+    if (event.governance?.action_taken === "blocked") return "blocked";
+    if (event.governance?.action_taken === "flagged") return "flagged";
+    if (event.tool?.status === "error") return "error";
+    if (event.tool?.status === "blocked") return "blocked";
+    if (event.type === "session_start" || event.type === "session_end") return "info";
+    return "allowed";
+  }
+
+  /**
+   * Infer severity from the event. Blocked tool calls are high severity
+   * because they represent policy enforcement actions. Errors are medium.
+   * Normal operations are low/info.
+   */
+  private mapSeverity(event: AgentEvent): EventSeverity {
+    if (event.type === "tool_call_blocked") return "high";
+    if (event.governance?.action_taken === "blocked") return "high";
+    if (event.tool?.status === "error") return "medium";
+    if (event.anomaly?.detected) {
+      return event.anomaly.confidence > 0.8 ? "high" : "medium";
+    }
+    return "info";
   }
 }
