@@ -1,0 +1,56 @@
+[
+  {
+    "hook_event_name": "PreToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Read",
+    "tool_input": { "file_path": "/src/index.ts" }
+  },
+  {
+    "hook_event_name": "PostToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Read",
+    "tool_input": { "file_path": "/src/index.ts" }
+  },
+  {
+    "hook_event_name": "PreToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm test" }
+  },
+  {
+    "hook_event_name": "PostToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm test" }
+  },
+  {
+    "hook_event_name": "PreToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Bash",
+    "tool_input": { "command": "rm -rf /home/user/production-data" }
+  },
+  {
+    "hook_event_name": "PreToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Write",
+    "tool_input": { "file_path": "/src/new-feature.ts", "content": "export const feature = true;" }
+  },
+  {
+    "hook_event_name": "PostToolUse",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project",
+    "tool_name": "Write",
+    "tool_input": { "file_path": "/src/new-feature.ts" }
+  },
+  {
+    "hook_event_name": "Stop",
+    "session_id": "golden-session-001",
+    "cwd": "/home/user/my-project"
+  }
+]

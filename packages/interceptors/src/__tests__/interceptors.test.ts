@@ -22,7 +22,7 @@ import {
   ConsoleListener,
   JsonlFileListener,
   CallbackListener,
-  type ClaudeCodeHookEvent,
+  type ClaudeCodeHookInput,
 } from "../index";
 
 // ─── Helper: Create a temp project directory ────────────────────────
@@ -223,23 +223,27 @@ describe("ClaudeCodeInterceptor", () => {
     cleanup(tmpDir);
   });
 
-  it("installs hooks.json and handler script", async () => {
+  it("installs settings.local.json and handler script", async () => {
     const interceptor = new ClaudeCodeInterceptor({
       projectDir: tmpDir,
       log_level: "silent",
     });
     await interceptor.start();
 
-    // Verify hooks.json was created
-    const hooksJsonPath = path.join(tmpDir, "hooks", "hooks.json");
-    expect(fs.existsSync(hooksJsonPath)).toBe(true);
-    const hooks = JSON.parse(fs.readFileSync(hooksJsonPath, "utf-8"));
-    expect(hooks.hooks.PreToolUse).toBeDefined();
-    expect(hooks.hooks.PostToolUse).toBeDefined();
-    expect(hooks.hooks.Stop).toBeDefined();
+    // Verify .claude/settings.local.json was created with correct hooks format
+    const settingsPath = path.join(tmpDir, ".claude", "settings.local.json");
+    expect(fs.existsSync(settingsPath)).toBe(true);
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    expect(settings.hooks).toBeDefined();
+    expect(settings.hooks.PreToolUse).toBeDefined();
+    expect(settings.hooks.PreToolUse[0].matcher).toBe("");
+    expect(settings.hooks.PreToolUse[0].hooks[0].type).toBe("command");
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("handler.js");
+    expect(settings.hooks.PostToolUse).toBeDefined();
+    expect(settings.hooks.Stop).toBeDefined();
 
-    // Verify handler script was created
-    const handlerPath = path.join(tmpDir, "hooks", "sentinelflow-handler.js");
+    // Verify handler script was created in .sentinelflow/
+    const handlerPath = path.join(tmpDir, ".sentinelflow", "handler.js");
     expect(fs.existsSync(handlerPath)).toBe(true);
 
     await interceptor.stop();
@@ -254,7 +258,7 @@ describe("ClaudeCodeInterceptor", () => {
     await interceptor.stop();
 
     // Handler should be removed
-    const handlerPath = path.join(tmpDir, "hooks", "sentinelflow-handler.js");
+    const handlerPath = path.join(tmpDir, ".sentinelflow", "handler.js");
     expect(fs.existsSync(handlerPath)).toBe(false);
   });
 
@@ -265,15 +269,16 @@ describe("ClaudeCodeInterceptor", () => {
     });
     await interceptor.start();
 
-    const hookEvent: ClaudeCodeHookEvent = {
-      hook_type: "PreToolUse",
+    const hookEvent: ClaudeCodeHookInput = {
+      hook_event_name: "PreToolUse",
       tool_name: "Read",
       tool_input: { file_path: "/src/index.ts" },
       session_id: "test-session",
+      cwd: tmpDir,
     };
 
     const decision = await interceptor.processHookEvent(hookEvent);
-    expect(decision).toEqual({ decision: "allow" });
+    expect(decision).toEqual({});
 
     await interceptor.stop();
   });
@@ -286,11 +291,12 @@ describe("ClaudeCodeInterceptor", () => {
     });
     await interceptor.start();
 
-    const hookEvent: ClaudeCodeHookEvent = {
-      hook_type: "PreToolUse",
+    const hookEvent: ClaudeCodeHookInput = {
+      hook_event_name: "PreToolUse",
       tool_name: "Bash",
       tool_input: { command: "npm test" },
       session_id: "test-session",
+      cwd: tmpDir,
     };
 
     const decision = await interceptor.processHookEvent(hookEvent);
@@ -308,14 +314,16 @@ describe("ClaudeCodeInterceptor", () => {
 
     // Process a few events
     await interceptor.processHookEvent({
-      hook_type: "PreToolUse",
+      hook_event_name: "PreToolUse",
       tool_name: "Read",
       session_id: "s1",
+      cwd: tmpDir,
     });
     await interceptor.processHookEvent({
-      hook_type: "PostToolUse",
+      hook_event_name: "PostToolUse",
       tool_name: "Read",
       session_id: "s1",
+      cwd: tmpDir,
     });
 
     const stats = interceptor.getStats();
@@ -336,10 +344,11 @@ describe("ClaudeCodeInterceptor", () => {
     await interceptor.start();
 
     await interceptor.processHookEvent({
-      hook_type: "PreToolUse",
+      hook_event_name: "PreToolUse",
       tool_name: "Read",
       tool_input: { file_path: "/src/index.ts" },
       session_id: "s1",
+      cwd: tmpDir,
     });
 
     await interceptor.stop();
@@ -367,6 +376,10 @@ describe("ClaudeCodeInterceptor", () => {
     });
     await interceptor.start();
     expect(ClaudeCodeInterceptor.isInstalled(tmpDir)).toBe(true);
+
+    // Manually stop without unhooking to test isInstalled independently
+    const handlerPath = path.join(tmpDir, ".sentinelflow", "handler.js");
+    expect(fs.existsSync(handlerPath)).toBe(true);
 
     await interceptor.stop();
     expect(ClaudeCodeInterceptor.isInstalled(tmpDir)).toBe(false);

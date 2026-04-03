@@ -33,3 +33,11 @@ coverage/
 
 # OS
 Thumbs.db
+
+# SentinelFlow runtime data (generated at runtime)
+.sentinelflow/events.db
+.sentinelflow/events.db-wal
+.sentinelflow/events.db-shm
+.sentinelflow/events.jsonl
+.sentinelflow/events.jsonl.1
+.sentinelflow/handler.js

@@ -1,47 +1,45 @@
 /**
  * @module @sentinelflow/interceptors/claude-code
  *
- * Claude Code Runtime Interceptor
- * ================================
+ * Claude Code Runtime Interceptor — HARDENED against official hooks contract.
  *
- * Claude Code provides a hooks system (hooks/hooks.json) that lets you run
- * shell commands at key lifecycle points:
+ * Hooks contract (verified against code.claude.com/docs/en/hooks):
  *
- *   PreToolUse  → Fires BEFORE a tool executes. Can return {"decision":"block"}
- *                 to prevent the tool call. This is our enforcement point.
- *   PostToolUse → Fires AFTER a tool completes. Gets the result. This is
- *                 our telemetry and anomaly detection point.
- *   Stop        → Fires when the agent session ends.
+ *   Configuration lives in `.claude/settings.local.json` (per-user, gitignored)
+ *   or `.claude/settings.json` (project-level, committed). Format:
  *
- * How this interceptor works:
- *
- *   1. install() generates a hooks.json that routes events to our handler
- *   2. The handler is a small Node.js script that reads the hook event from
- *      stdin, converts it to an AgentEvent, evaluates policies, and returns
- *      a decision to stdout (for PreToolUse) or just logs (for PostToolUse)
- *   3. Events are written to a local event log (JSONL file) that the event
- *      store and dashboard can consume
- *   4. uninstall() removes the hooks config
- *
- * The hooks.json format (from Claude Code docs):
- * {
- *   "hooks": {
- *     "PreToolUse": [{ "type": "command", "command": "node handler.js pre" }],
- *     "PostToolUse": [{ "type": "command", "command": "node handler.js post" }],
- *     "Stop": [{ "type": "command", "command": "node handler.js stop" }]
+ *   {
+ *     "hooks": {
+ *       "PreToolUse": [{
+ *         "matcher": "",
+ *         "hooks": [{
+ *           "type": "command",
+ *           "command": "node \"$CLAUDE_PROJECT_DIR/.sentinelflow/handler.js\"",
+ *           "timeout": 10000
+ *         }]
+ *       }]
+ *     }
  *   }
- * }
  *
- * The handler receives the event on stdin as JSON:
- * {
- *   "hook_type": "PreToolUse",
- *   "tool_name": "Bash",
- *   "tool_input": { "command": "rm -rf /" },
- *   "session_id": "abc123"
- * }
+ *   Stdin JSON for PreToolUse:
+ *   {
+ *     "session_id": "abc123",
+ *     "transcript_path": "/home/user/.claude/projects/.../transcript.jsonl",
+ *     "cwd": "/home/user/my-project",
+ *     "permission_mode": "default",
+ *     "hook_event_name": "PreToolUse",
+ *     "tool_name": "Bash",
+ *     "tool_input": { "command": "npm test" }
+ *   }
  *
- * For PreToolUse, the handler returns a decision on stdout:
- * { "decision": "allow" } or { "decision": "block", "reason": "..." }
+ *   Exit codes:
+ *     0 = allow. Stdout JSON optional (shown in verbose mode only).
+ *     2 = block. Stderr text fed back to Claude as error message.
+ *     Other = non-blocking error. Stderr shown in verbose mode.
+ *
+ *   Structured JSON decisions (stdout, exit 0):
+ *     { "decision": "block", "reason": "..." }  — blocks the tool call
+ *     { "decision": "approve", "reason": "..." } — bypasses permission prompt
  */
 
 import * as fs from "fs";
@@ -55,21 +53,37 @@ import type {
   EventListener,
 } from "./interface";
 
-// ─── Claude Code Hook Event Types ───────────────────────────────────
+// ─── Claude Code Hook Event Types (matches real stdin JSON) ─────────
 
-export interface ClaudeCodeHookEvent {
-  hook_type: "PreToolUse" | "PostToolUse" | "Stop" | "PreCompact" | "SessionStart";
+/** The actual JSON shape Claude Code sends on stdin for ALL hook events. */
+export interface ClaudeCodeHookInput {
+  /** Session correlation ID */
+  session_id: string;
+  /** Path to the session transcript JSONL file */
+  transcript_path?: string;
+  /** Current working directory */
+  cwd: string;
+  /** Permission mode: "default", "plan", "bypassPermissions" */
+  permission_mode?: string;
+  /** Which hook event fired: "PreToolUse", "PostToolUse", "Stop", etc. */
+  hook_event_name: string;
+  /** Tool name (PreToolUse/PostToolUse only): "Bash", "Read", "Write", "Edit", etc. */
   tool_name?: string;
+  /** Tool input parameters (PreToolUse/PostToolUse only) */
   tool_input?: Record<string, unknown>;
-  tool_output?: string;
-  session_id?: string;
+  /** Tool response (PostToolUse only) */
+  tool_response?: unknown;
+  /** Agent name when running with --agent or inside a subagent */
   agent_name?: string;
-  /** Error from the tool, if PostToolUse with a failed tool */
-  error?: string;
+  /** Agent CWD when running inside a subagent */
+  agent_cwd?: string;
 }
 
+/** What our handler writes to stdout (exit 0) for PreToolUse hooks. */
 export interface ClaudeCodeHookDecision {
-  decision: "allow" | "block";
+  /** "block" prevents the tool call. "approve" bypasses permission prompt. */
+  decision?: "block" | "approve";
+  /** Reason text. For "block": fed back to Claude. For "approve": shown to user. */
   reason?: string;
 }
 
@@ -88,17 +102,21 @@ export interface ClaudeCodeInterceptorConfig extends Partial<InterceptorConfig> 
   toolBlocklist?: string[];
   /** Maximum input summary length stored in events (truncated). Default: 500 chars */
   maxInputSummaryLength?: number;
+  /** Write hooks to settings.json (committed) vs settings.local.json (gitignored). Default: "local" */
+  settingsTarget?: "local" | "project";
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
 
-const HOOKS_DIR = "hooks";
-const HOOKS_JSON = "hooks.json";
-const HANDLER_SCRIPT = "sentinelflow-handler.js";
-const EVENT_LOG_DIR = ".sentinelflow";
+const CLAUDE_DIR = ".claude";
+const SETTINGS_LOCAL = "settings.local.json";
+const SETTINGS_PROJECT = "settings.json";
+const SF_DIR = ".sentinelflow";
+const HANDLER_SCRIPT = "handler.js";
 const EVENT_LOG_FILE = "events.jsonl";
 const DEFAULT_MAX_LOG_SIZE = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_MAX_INPUT_LENGTH = 500;
+const HOOK_TIMEOUT_MS = 10000; // 10 seconds
 
 // High-risk tools that get extra scrutiny in policy evaluation
 const HIGH_RISK_TOOLS = new Set([
@@ -120,86 +138,150 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
   private _toolAllowlist: Set<string>;
   private _toolBlocklist: Set<string>;
   private _maxInputLength: number;
-  private _originalHooksJson: string | null = null;
+  private _settingsTarget: "local" | "project";
+  private _originalSettings: string | null = null;
 
   constructor(config: ClaudeCodeInterceptorConfig) {
     super(config);
     this._projectDir = path.resolve(config.projectDir);
     this._eventLogPath =
       config.eventLogPath ??
-      path.join(this._projectDir, EVENT_LOG_DIR, EVENT_LOG_FILE);
+      path.join(this._projectDir, SF_DIR, EVENT_LOG_FILE);
     this._maxLogSize = config.maxLogSizeBytes ?? DEFAULT_MAX_LOG_SIZE;
     this._toolAllowlist = new Set(config.toolAllowlist ?? []);
     this._toolBlocklist = new Set(config.toolBlocklist ?? []);
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
+    this._settingsTarget = config.settingsTarget ?? "local";
   }
 
   // ─── Framework Hook Methods ─────────────────────────────────
 
   protected async hookFramework(): Promise<void> {
-    // Ensure the hooks directory and event log directory exist
-    const hooksDir = path.join(this._projectDir, HOOKS_DIR);
-    const eventLogDir = path.dirname(this._eventLogPath);
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.mkdirSync(eventLogDir, { recursive: true });
+    // Ensure the .sentinelflow and .claude directories exist
+    const sfDir = path.join(this._projectDir, SF_DIR);
+    const claudeDir = path.join(this._projectDir, CLAUDE_DIR);
+    fs.mkdirSync(sfDir, { recursive: true });
+    fs.mkdirSync(claudeDir, { recursive: true });
 
-    // Backup existing hooks.json if present
-    const hooksJsonPath = path.join(hooksDir, HOOKS_JSON);
-    if (fs.existsSync(hooksJsonPath)) {
-      this._originalHooksJson = fs.readFileSync(hooksJsonPath, "utf-8");
-      this.log("info", "Backed up existing hooks.json");
-    }
-
-    // Generate the handler script that Claude Code will invoke
-    const handlerPath = path.join(hooksDir, HANDLER_SCRIPT);
+    // Generate the handler script into .sentinelflow/handler.js
+    const handlerPath = path.join(sfDir, HANDLER_SCRIPT);
     fs.writeFileSync(handlerPath, this.generateHandlerScript());
     fs.chmodSync(handlerPath, "755");
 
-    // Generate hooks.json that wires Claude Code events to our handler
-    const hooksConfig = this.generateHooksJson(handlerPath);
-    fs.writeFileSync(hooksJsonPath, JSON.stringify(hooksConfig, null, 2));
+    // Merge our hooks into the correct settings file
+    const settingsFile = this._settingsTarget === "local"
+      ? SETTINGS_LOCAL
+      : SETTINGS_PROJECT;
+    const settingsPath = path.join(claudeDir, settingsFile);
 
-    this.log("info", `Installed hooks at ${hooksJsonPath}`);
+    // Backup existing settings
+    if (fs.existsSync(settingsPath)) {
+      this._originalSettings = fs.readFileSync(settingsPath, "utf-8");
+    }
+
+    // Read existing settings or start fresh
+    let settings: Record<string, unknown> = {};
+    if (this._originalSettings) {
+      try {
+        settings = JSON.parse(this._originalSettings);
+      } catch {
+        settings = {};
+      }
+    }
+
+    // Merge our hooks config (preserving any existing hooks)
+    const hooksConfig = this.generateHooksConfig();
+    const existingHooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
+
+    for (const [eventName, hookEntries] of Object.entries(hooksConfig.hooks)) {
+      if (!existingHooks[eventName]) {
+        existingHooks[eventName] = [];
+      }
+      // Remove any existing SentinelFlow hooks before adding fresh ones
+      existingHooks[eventName] = (existingHooks[eventName] as Array<Record<string, unknown>>).filter(
+        (entry) => {
+          const innerHooks = entry.hooks as Array<Record<string, string>> | undefined;
+          if (!innerHooks) return true;
+          return !innerHooks.some((h) =>
+            (h.command ?? "").includes("sentinelflow") || (h.command ?? "").includes(HANDLER_SCRIPT)
+          );
+        }
+      );
+      existingHooks[eventName].push(...hookEntries);
+    }
+
+    settings.hooks = existingHooks;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    this.log("info", `Installed hooks in ${settingsPath}`);
+    this.log("info", `Handler: ${handlerPath}`);
     this.log("info", `Event log: ${this._eventLogPath}`);
   }
 
   protected async unhookFramework(): Promise<void> {
-    const hooksDir = path.join(this._projectDir, HOOKS_DIR);
-    const hooksJsonPath = path.join(hooksDir, HOOKS_JSON);
-    const handlerPath = path.join(hooksDir, HANDLER_SCRIPT);
+    const sfDir = path.join(this._projectDir, SF_DIR);
+    const handlerPath = path.join(sfDir, HANDLER_SCRIPT);
 
-    // Restore original hooks.json or remove ours
-    if (this._originalHooksJson) {
-      fs.writeFileSync(hooksJsonPath, this._originalHooksJson);
-      this.log("info", "Restored original hooks.json");
-    } else if (fs.existsSync(hooksJsonPath)) {
-      fs.unlinkSync(hooksJsonPath);
-    }
-
-    // Remove our handler script
+    // Remove handler script
     if (fs.existsSync(handlerPath)) {
       fs.unlinkSync(handlerPath);
+    }
+
+    // Restore or clean up settings file
+    const settingsFile = this._settingsTarget === "local"
+      ? SETTINGS_LOCAL
+      : SETTINGS_PROJECT;
+    const settingsPath = path.join(this._projectDir, CLAUDE_DIR, settingsFile);
+
+    if (this._originalSettings) {
+      fs.writeFileSync(settingsPath, this._originalSettings);
+      this.log("info", "Restored original settings");
+    } else if (fs.existsSync(settingsPath)) {
+      // Remove our hooks from the settings
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        if (settings.hooks) {
+          for (const eventName of Object.keys(settings.hooks)) {
+            settings.hooks[eventName] = (settings.hooks[eventName] as Array<Record<string, unknown>>).filter(
+              (entry) => {
+                const innerHooks = entry.hooks as Array<Record<string, string>> | undefined;
+                if (!innerHooks) return true;
+                return !innerHooks.some((h) =>
+                  (h.command ?? "").includes("sentinelflow") || (h.command ?? "").includes(HANDLER_SCRIPT)
+                );
+              }
+            );
+            // Remove empty arrays
+            if ((settings.hooks[eventName] as unknown[]).length === 0) {
+              delete settings.hooks[eventName];
+            }
+          }
+          if (Object.keys(settings.hooks).length === 0) {
+            delete settings.hooks;
+          }
+        }
+        // Only write back if there's still content
+        if (Object.keys(settings).length > 0) {
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        } else {
+          fs.unlinkSync(settingsPath);
+        }
+      } catch {
+        // If we can't parse it, leave it alone
+      }
     }
 
     this.log("info", "Uninstalled Claude Code hooks");
   }
 
-  // ─── Process a Hook Event (called by the handler script) ────
+  // ─── Process a Hook Event (called by handler script or tests) ─
 
-  /**
-   * Process a raw Claude Code hook event. This is the main entry point
-   * called by the handler script when Claude Code fires a hook.
-   *
-   * For PreToolUse: evaluates policies and returns allow/block.
-   * For PostToolUse: logs the result and checks for anomalies.
-   * For Stop: emits session_end.
-   */
   async processHookEvent(
-    rawEvent: ClaudeCodeHookEvent
+    rawEvent: ClaudeCodeHookInput
   ): Promise<ClaudeCodeHookDecision | null> {
-    switch (rawEvent.hook_type) {
-      case "SessionStart":
-        return this.handleSessionStart(rawEvent);
+    const hookName = rawEvent.hook_event_name;
+
+    switch (hookName) {
       case "PreToolUse":
         return this.handlePreToolUse(rawEvent);
       case "PostToolUse":
@@ -208,30 +290,32 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
       case "Stop":
         await this.handleStop(rawEvent);
         return null;
+      case "SessionStart":
+        await this.handleSessionStart(rawEvent);
+        return null;
       default:
-        this.log("warn", `Unknown hook type: ${rawEvent.hook_type}`);
+        this.log("debug", `Unhandled hook event: ${hookName}`);
         return null;
     }
   }
 
   // ─── Hook Event Handlers ────────────────────────────────────
 
-  private async handleSessionStart(
-    rawEvent: ClaudeCodeHookEvent
-  ): Promise<null> {
+  private async handleSessionStart(rawEvent: ClaudeCodeHookInput): Promise<void> {
     const event = this.createEvent("session_start", {
       metadata: {
         claude_session_id: rawEvent.session_id,
+        cwd: rawEvent.cwd,
         agent_name: rawEvent.agent_name,
+        permission_mode: rawEvent.permission_mode,
       },
     });
     await this.emitEvent(event);
     this.appendToEventLog(event);
-    return null;
   }
 
   private async handlePreToolUse(
-    rawEvent: ClaudeCodeHookEvent
+    rawEvent: ClaudeCodeHookInput
   ): Promise<ClaudeCodeHookDecision> {
     const toolName = rawEvent.tool_name ?? "unknown";
 
@@ -245,12 +329,13 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
         },
         metadata: {
           claude_session_id: rawEvent.session_id,
+          cwd: rawEvent.cwd,
           bypassed_by: "allowlist",
         },
       });
       await this.emitEvent(event);
       this.appendToEventLog(event);
-      return { decision: "allow" };
+      return {}; // Empty object = allow (no decision field)
     }
 
     // Fast path: blocklist immediate block
@@ -277,7 +362,7 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
       this.appendToEventLog(event);
       return {
         decision: "block",
-        reason: `Tool "${toolName}" is blocked by SentinelFlow policy`,
+        reason: `SentinelFlow: Tool "${toolName}" is blocked by policy`,
       };
     }
 
@@ -287,6 +372,7 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
       this.summarizeInput(rawEvent.tool_input),
       {
         claude_session_id: rawEvent.session_id,
+        cwd: rawEvent.cwd,
         tool_input_raw: rawEvent.tool_input,
         is_high_risk: HIGH_RISK_TOOLS.has(toolName),
       }
@@ -297,29 +383,25 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
     if (!allowed) {
       return {
         decision: "block",
-        reason: event.governance?.reason ?? "Blocked by SentinelFlow policy",
+        reason: `SentinelFlow: ${event.governance?.reason ?? "Blocked by policy"}`,
       };
     }
 
-    return { decision: "allow" };
+    return {}; // Allow
   }
 
-  private async handlePostToolUse(rawEvent: ClaudeCodeHookEvent): Promise<void> {
+  private async handlePostToolUse(rawEvent: ClaudeCodeHookInput): Promise<void> {
     const toolName = rawEvent.tool_name ?? "unknown";
-    const hasError = !!rawEvent.error;
 
     const event = this.createEvent("tool_call_end", {
       tool: {
         name: toolName,
         input_summary: this.summarizeInput(rawEvent.tool_input),
-        output_summary: rawEvent.tool_output
-          ? rawEvent.tool_output.slice(0, this._maxInputLength)
-          : undefined,
-        status: hasError ? "error" : "success",
-        error_message: rawEvent.error,
+        status: "success",
       },
       metadata: {
         claude_session_id: rawEvent.session_id,
+        cwd: rawEvent.cwd,
       },
     });
 
@@ -327,7 +409,7 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
     this.appendToEventLog(event);
   }
 
-  private async handleStop(rawEvent: ClaudeCodeHookEvent): Promise<void> {
+  private async handleStop(rawEvent: ClaudeCodeHookInput): Promise<void> {
     const event = this.createEvent("session_end", {
       metadata: {
         claude_session_id: rawEvent.session_id,
@@ -341,24 +423,21 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
 
   private appendToEventLog(event: AgentEvent): void {
     try {
+      const dir = path.dirname(this._eventLogPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
       // Rotate if too large
       if (
         fs.existsSync(this._eventLogPath) &&
         fs.statSync(this._eventLogPath).size > this._maxLogSize
       ) {
         const rotatedPath = this._eventLogPath + ".1";
-        if (fs.existsSync(rotatedPath)) {
-          fs.unlinkSync(rotatedPath);
-        }
+        if (fs.existsSync(rotatedPath)) fs.unlinkSync(rotatedPath);
         fs.renameSync(this._eventLogPath, rotatedPath);
         this.log("info", "Rotated event log");
       }
 
-      fs.appendFileSync(
-        this._eventLogPath,
-        JSON.stringify(event) + "\n",
-        "utf-8"
-      );
+      fs.appendFileSync(this._eventLogPath, JSON.stringify(event) + "\n", "utf-8");
     } catch (err) {
       this.log("error", `Failed to write event log: ${err}`);
     }
@@ -368,343 +447,365 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
 
   private summarizeInput(input?: Record<string, unknown>): string | undefined {
     if (!input) return undefined;
-
-    // For Bash tools, show the command
-    if (typeof input.command === "string") {
-      return input.command.slice(0, this._maxInputLength);
-    }
-    // For file tools, show the path
-    if (typeof input.file_path === "string") {
-      return `file: ${input.file_path}`;
-    }
-    if (typeof input.path === "string") {
-      return `path: ${input.path}`;
-    }
-
-    // Generic: JSON stringify truncated
+    if (typeof input.command === "string") return input.command.slice(0, this._maxInputLength);
+    if (typeof input.file_path === "string") return `file: ${input.file_path}`;
+    if (typeof input.path === "string") return `path: ${input.path}`;
+    if (typeof input.content === "string") return `content: ${input.content.slice(0, 100)}...`;
     const raw = JSON.stringify(input);
-    return raw.length > this._maxInputLength
-      ? raw.slice(0, this._maxInputLength) + "..."
-      : raw;
+    return raw.length > this._maxInputLength ? raw.slice(0, this._maxInputLength) + "..." : raw;
   }
 
-  // ─── Code Generation ────────────────────────────────────────
+  // ─── Hooks Config Generation ────────────────────────────────
 
   /**
-   * Generate the hooks.json config that wires Claude Code events
-   * to our handler script.
+   * Generate the hooks config object that gets merged into
+   * .claude/settings.local.json. Uses $CLAUDE_PROJECT_DIR for
+   * reliable path resolution across working directories.
    */
-  private generateHooksJson(handlerPath: string): object {
+  private generateHooksConfig(): { hooks: Record<string, Array<Record<string, unknown>>> } {
+    // Use $CLAUDE_PROJECT_DIR env var for path resolution.
+    // Claude Code sets this to the project root automatically.
+    const handlerCmd = `node "$CLAUDE_PROJECT_DIR/${SF_DIR}/${HANDLER_SCRIPT}"`;
+
+    const hookEntry = (matcher: string) => ({
+      matcher,
+      hooks: [
+        {
+          type: "command",
+          command: handlerCmd,
+          timeout: HOOK_TIMEOUT_MS,
+        },
+      ],
+    });
+
     return {
       hooks: {
-        PreToolUse: [
-          {
-            type: "command",
-            command: `node "${handlerPath}" pre`,
-          },
-        ],
-        PostToolUse: [
-          {
-            type: "command",
-            command: `node "${handlerPath}" post`,
-          },
-        ],
-        Stop: [
-          {
-            type: "command",
-            command: `node "${handlerPath}" stop`,
-          },
-        ],
+        PreToolUse: [hookEntry("")],   // Match ALL tools
+        PostToolUse: [hookEntry("")],   // Match ALL tools
+        Stop: [hookEntry("")],
       },
     };
   }
 
   /**
-   * Generate the handler script that Claude Code will invoke.
-   * This script runs as a subprocess — it reads the hook event from stdin,
-   * processes it, and writes the decision to stdout (for PreToolUse).
+   * Generate the handler script. This is a self-contained Node.js file
+   * that Claude Code invokes as a subprocess.
    *
-   * The handler is a self-contained Node.js script that:
-   * 1. Reads the hook event from stdin
-   * 2. Loads the policy config from .sentinelflow-policy.yaml
-   * 3. Evaluates tool allowlists/blocklists
-   * 4. Writes the decision to stdout (PreToolUse only)
-   * 5. Appends the event to the JSONL log
+   * CRITICAL: The handler determines the hook phase from stdin JSON's
+   * `hook_event_name` field — NOT from process.argv. Claude Code sends
+   * the same handler command for all hook events.
+   *
+   * Dual-write: events go to both JSONL (fast, always works) and
+   * SQLite (structured queries). SQLite failure never blocks the workflow.
    */
   private generateHandlerScript(): string {
-    // The handler needs to be self-contained because Claude Code
-    // runs it as a subprocess. We inline the config values.
     return `#!/usr/bin/env node
 /**
  * SentinelFlow Claude Code Hook Handler
  * Generated by @sentinelflow/interceptors
  *
- * This script is invoked by Claude Code's hooks system.
- * It reads event data from stdin and writes decisions to stdout.
+ * This script is invoked by Claude Code's hooks system for ALL hook events.
+ * The hook type is determined from stdin JSON's "hook_event_name" field.
+ *
+ * Exit codes (Claude Code hooks contract):
+ *   0 = success. Stdout JSON processed (shown in verbose mode).
+ *   2 = block. Stderr text fed back to Claude as error message.
+ *   Other = non-blocking error. Stderr shown in verbose mode.
  */
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
-// ─── Configuration (generated at install time) ──────────────
-const EVENT_LOG = ${JSON.stringify(this._eventLogPath)};
+// ─── Configuration (baked in at install time) ───────────────
+const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || ${JSON.stringify(this._projectDir)};
+const SF_DIR = path.join(PROJECT_DIR, ".sentinelflow");
+const EVENT_LOG = path.join(SF_DIR, "events.jsonl");
+const DB_PATH = path.join(SF_DIR, "events.db");
 const TOOL_ALLOWLIST = new Set(${JSON.stringify([...this._toolAllowlist])});
 const TOOL_BLOCKLIST = new Set(${JSON.stringify([...this._toolBlocklist])});
 const ENFORCEMENT_MODE = ${JSON.stringify(this.enforcementMode)};
 const MAX_INPUT_LENGTH = ${this._maxInputLength};
-const PROJECT_DIR = ${JSON.stringify(this._projectDir)};
 
-// ─── Policy Loading ─────────────────────────────────────────
-function loadPolicies() {
-  const policyPath = path.join(PROJECT_DIR, ".sentinelflow-policy.yaml");
-  if (!fs.existsSync(policyPath)) return null;
-  try {
-    // Simple YAML parsing for the runtime_policies section
-    const content = fs.readFileSync(policyPath, "utf-8");
-    // Look for runtime_policies block
-    const runtimeMatch = content.match(/runtime_policies:([\\s\\S]*?)(?=\\n[a-z]|$)/);
-    if (!runtimeMatch) return null;
-    
-    const block = runtimeMatch[1];
-    const policies = {};
-    
-    // Parse blocked_tools list
-    const blockedMatch = block.match(/blocked_tools:\\s*\\n((?:\\s+-\\s+.+\\n?)*)/);
-    if (blockedMatch) {
-      policies.blocked_tools = blockedMatch[1]
-        .split("\\n")
-        .map(l => l.trim().replace(/^-\\s+/, ""))
-        .filter(Boolean);
-    }
-    
-    // Parse allowed_tools list
-    const allowedMatch = block.match(/allowed_tools:\\s*\\n((?:\\s+-\\s+.+\\n?)*)/);
-    if (allowedMatch) {
-      policies.allowed_tools = allowedMatch[1]
-        .split("\\n")
-        .map(l => l.trim().replace(/^-\\s+/, ""))
-        .filter(Boolean);
-    }
-
-    // Parse max_cost_per_session
-    const costMatch = block.match(/max_cost_per_session:\\s*([\\d.]+)/);
-    if (costMatch) {
-      policies.max_cost_per_session = parseFloat(costMatch[1]);
-    }
-
-    return policies;
-  } catch {
-    return null;
-  }
+// ─── SQLite (optional — graceful degradation) ───────────────
+let db = null;
+try {
+  const Database = require("better-sqlite3");
+  if (!fs.existsSync(SF_DIR)) fs.mkdirSync(SF_DIR, { recursive: true });
+  db = new Database(DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("busy_timeout = 3000");
+  db.exec(\`
+    CREATE TABLE IF NOT EXISTS events (
+      event_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL DEFAULT 1,
+      ts TEXT NOT NULL, agent_id TEXT NOT NULL, framework TEXT NOT NULL,
+      session_id TEXT NOT NULL, parent_event_id TEXT,
+      event_type TEXT NOT NULL, outcome TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      tool_name TEXT, tool_input_summary TEXT, action TEXT,
+      policy_id TEXT, policy_name TEXT, reason TEXT,
+      prompt_tokens INTEGER, completion_tokens INTEGER, cost_usd REAL,
+      model TEXT, duration_ms INTEGER, payload_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON events(agent_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, ts);
+    CREATE INDEX IF NOT EXISTS idx_events_outcome_ts ON events(outcome, ts);
+    CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+    CREATE INDEX IF NOT EXISTS idx_events_tool ON events(tool_name, ts);
+    CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity, ts);
+  \`);
+} catch (e) {
+  // SQLite unavailable — JSONL-only mode. This is fine.
 }
 
-// ─── Event Logging ──────────────────────────────────────────
-function logEvent(event) {
-  try {
-    const dir = path.dirname(EVENT_LOG);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(EVENT_LOG, JSON.stringify(event) + "\\n");
-  } catch { /* never crash on log failure */ }
-}
-
-function createEvent(type, toolName, toolInput, sessionId, extra = {}) {
-  return {
-    id: Math.random().toString(36).slice(2) + Date.now().toString(36),
-    timestamp: new Date().toISOString(),
-    agent_id: "claude-code",
-    session_id: sessionId || "unknown",
-    type,
-    tool: toolName ? {
-      name: toolName,
-      input_summary: summarizeInput(toolInput),
-      status: extra.status || "success",
-    } : undefined,
-    governance: extra.governance,
-    metadata: extra.metadata,
-  };
-}
-
+// ─── Helpers ────────────────────────────────────────────────
 function summarizeInput(input) {
-  if (!input) return undefined;
+  if (!input) return null;
   if (typeof input.command === "string") return input.command.slice(0, MAX_INPUT_LENGTH);
   if (typeof input.file_path === "string") return "file: " + input.file_path;
   if (typeof input.path === "string") return "path: " + input.path;
+  if (typeof input.content === "string") return "content: " + input.content.slice(0, 100) + "...";
   const raw = JSON.stringify(input);
   return raw.length > MAX_INPUT_LENGTH ? raw.slice(0, MAX_INPUT_LENGTH) + "..." : raw;
 }
 
+function persistEvent(ev) {
+  try {
+    if (!fs.existsSync(SF_DIR)) fs.mkdirSync(SF_DIR, { recursive: true });
+    fs.appendFileSync(EVENT_LOG, JSON.stringify(ev) + "\\n");
+  } catch { /* never crash on log failure */ }
+
+  if (db) {
+    try {
+      db.prepare(\`INSERT OR IGNORE INTO events (
+        event_id, ts, agent_id, framework, session_id,
+        event_type, outcome, severity,
+        tool_name, tool_input_summary, action,
+        policy_id, reason, payload_json
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)\`).run(
+        ev.event_id, ev.timestamp, ev.agent_id, ev.framework, ev.session_id,
+        ev.event_type, ev.outcome, ev.severity,
+        ev.tool_name || null, ev.tool_input_summary || null, ev.action || null,
+        ev.policy_id || null, ev.reason || null,
+        ev.payload ? JSON.stringify(ev.payload) : null
+      );
+    } catch { /* SQLite failure is non-fatal */ }
+  }
+}
+
+function makeEvent(type, outcome, severity, opts = {}) {
+  return {
+    event_id: crypto.randomUUID(),
+    schema_version: 1,
+    timestamp: new Date().toISOString(),
+    agent_id: opts.agent_id || "claude-code",
+    framework: "claude_code",
+    session_id: opts.session_id || "unknown",
+    event_type: type,
+    outcome, severity,
+    tool_name: opts.tool_name || null,
+    tool_input_summary: opts.tool_input_summary || null,
+    action: opts.action || null,
+    policy_id: opts.policy_id || null,
+    reason: opts.reason || null,
+    payload: opts.payload || null,
+  };
+}
+
 // ─── Policy Evaluation ──────────────────────────────────────
-function evaluateToolPolicy(toolName, toolInput) {
-  // Static blocklist/allowlist
-  if (TOOL_BLOCKLIST.has(toolName)) {
-    return { decision: "block", reason: "Tool \\"" + toolName + "\\" is in the blocklist" };
-  }
-  if (TOOL_ALLOWLIST.has(toolName)) {
-    return { decision: "allow" };
-  }
+function evaluatePolicy(toolName, toolInput) {
+  if (TOOL_BLOCKLIST.has(toolName))
+    return { block: true, reason: 'Tool "' + toolName + '" is in the blocklist', id: "tool_blocklist" };
+  if (TOOL_ALLOWLIST.has(toolName))
+    return { block: false };
 
-  // Dynamic policies from .sentinelflow-policy.yaml
-  const policies = loadPolicies();
-  if (policies) {
-    if (policies.blocked_tools && policies.blocked_tools.includes(toolName)) {
-      return { decision: "block", reason: "Tool \\"" + toolName + "\\" blocked by .sentinelflow-policy.yaml" };
-    }
-    if (policies.allowed_tools && policies.allowed_tools.length > 0) {
-      if (!policies.allowed_tools.includes(toolName)) {
-        return { 
-          decision: ENFORCEMENT_MODE === "enforce" ? "block" : "allow",
-          reason: "Tool \\"" + toolName + "\\" not in allowed_tools list"
-        };
+  // Load runtime policies from .sentinelflow-policy.yaml if present
+  const policyPath = path.join(PROJECT_DIR, ".sentinelflow-policy.yaml");
+  if (fs.existsSync(policyPath)) {
+    try {
+      const content = fs.readFileSync(policyPath, "utf-8");
+      const rtMatch = content.match(/runtime_policies:([\\s\\S]*?)(?=\\n[a-z]|$)/);
+      if (rtMatch) {
+        const block = rtMatch[1];
+        const blockedMatch = block.match(/blocked_tools:\\s*\\n((?:\\s+-\\s+.+\\n?)*)/);
+        if (blockedMatch) {
+          const blocked = blockedMatch[1].split("\\n").map(l => l.trim().replace(/^-\\s+/, "")).filter(Boolean);
+          if (blocked.includes(toolName))
+            return { block: true, reason: 'Tool "' + toolName + '" blocked by policy file', id: "policy_yaml" };
+        }
       }
-    }
+    } catch { /* ignore policy parse errors */ }
   }
 
-  // Dangerous command patterns (Bash tool)
+  // Dangerous command patterns (Bash tool only)
   if (toolName === "Bash" && toolInput && typeof toolInput.command === "string") {
     const cmd = toolInput.command;
-    const dangerousPatterns = [
-      /rm\\s+-rf\\s+\\/(?!tmp)/,      // rm -rf outside /tmp
-      /curl.*\\|\\s*(?:bash|sh)/,     // curl | bash (pipe to shell)
-      /wget.*\\|\\s*(?:bash|sh)/,     // wget | bash
-      /chmod\\s+777/,                  // world-writable permissions
-      />(\\s*)\\/etc\\//,              // writing to /etc
+    const patterns = [
+      [/rm\\s+-rf\\s+\\/(?!tmp)/, "rm -rf outside /tmp"],
+      [/curl.*\\|\\s*(?:bash|sh)/, "curl piped to shell"],
+      [/wget.*\\|\\s*(?:bash|sh)/, "wget piped to shell"],
+      [/chmod\\s+777/, "world-writable permissions"],
+      [/>(\\s*)\\/etc\\//, "writing to /etc"],
+      [/dd\\s+if=.*of=\\/dev\\//, "dd to block device"],
+      [/mkfs\\./, "filesystem format"],
+      [/npm\\s+publish/, "npm publish"],
+      [/git\\s+push.*--force/, "force push"],
     ];
-    for (const pattern of dangerousPatterns) {
-      if (pattern.test(cmd)) {
+    for (const [re, desc] of patterns) {
+      if (re.test(cmd)) {
         return {
-          decision: ENFORCEMENT_MODE === "enforce" ? "block" : "allow",
-          reason: "Dangerous command pattern detected: " + cmd.slice(0, 100),
+          block: ENFORCEMENT_MODE === "enforce",
+          reason: "Dangerous command: " + desc + " — " + cmd.slice(0, 100),
+          id: "dangerous_commands",
         };
       }
     }
   }
 
-  return { decision: "allow" };
+  return { block: false };
 }
 
 // ─── Main ───────────────────────────────────────────────────
 async function main() {
-  const hookPhase = process.argv[2]; // "pre", "post", or "stop"
+  // Read all of stdin
+  let rawInput = "";
+  for await (const chunk of process.stdin) { rawInput += chunk; }
 
-  // Read the hook event from stdin
-  let input = "";
-  for await (const chunk of process.stdin) {
-    input += chunk;
-  }
-
-  let hookEvent;
+  // Parse JSON — fail open on parse failure
+  let input;
   try {
-    hookEvent = JSON.parse(input);
+    input = JSON.parse(rawInput);
   } catch {
-    // If stdin is empty or invalid, just exit cleanly
+    process.stderr.write("[sentinelflow] Failed to parse stdin JSON, failing open\\n");
     process.exit(0);
   }
 
-  const toolName = hookEvent.tool_name;
-  const toolInput = hookEvent.tool_input;
-  const sessionId = hookEvent.session_id;
+  // Determine hook type from the JSON — NOT from process.argv
+  const hookEvent = input.hook_event_name;
+  const toolName = input.tool_name;
+  const toolInput = input.tool_input;
+  const sessionId = input.session_id || "unknown";
+  const inputSummary = summarizeInput(toolInput);
 
-  switch (hookPhase) {
-    case "pre": {
-      const policy = evaluateToolPolicy(toolName, toolInput);
-      const event = createEvent(
-        policy.decision === "block" ? "tool_call_blocked" : "tool_call_start",
-        toolName,
-        toolInput,
-        sessionId,
-        {
-          status: policy.decision === "block" ? "blocked" : "success",
-          governance: {
-            policies_evaluated: ["tool_allowlist", "tool_blocklist", "command_patterns", "policy_yaml"],
-            policies_passed: policy.decision === "allow" ? ["all"] : [],
-            policies_failed: policy.decision === "block" ? [policy.reason] : [],
-            action_taken: policy.decision === "block" ? "blocked" : "allowed",
-            reason: policy.reason,
-          },
-        }
-      );
-      logEvent(event);
+  switch (hookEvent) {
+    case "PreToolUse": {
+      const policy = evaluatePolicy(toolName, toolInput);
+      const isBlock = policy.block;
 
-      // Write decision to stdout for Claude Code
-      if (policy.decision === "block") {
-        console.log(JSON.stringify({
-          decision: "block",
-          reason: policy.reason,
-        }));
+      persistEvent(makeEvent(
+        isBlock ? "tool_call_blocked" : "tool_call_attempted",
+        isBlock ? "blocked" : "allowed",
+        isBlock ? "high" : "info",
+        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+          action: inputSummary, policy_id: policy.id, reason: policy.reason,
+          payload: { hook: "PreToolUse", cwd: input.cwd } }
+      ));
+
+      if (isBlock) {
+        // Exit 2 = block. Stderr message is fed back to Claude.
+        process.stderr.write("SentinelFlow: " + (policy.reason || "Blocked by policy"));
+        process.exit(2);
       }
-      // For "allow", we output nothing (Claude Code treats no output as allow)
+      // Exit 0 = allow. No stdout needed.
       break;
     }
 
-    case "post": {
-      const event = createEvent("tool_call_end", toolName, toolInput, sessionId, {
-        status: hookEvent.error ? "error" : "success",
-      });
-      if (hookEvent.error) {
-        event.tool.error_message = hookEvent.error;
-      }
-      logEvent(event);
+    case "PostToolUse": {
+      const hasError = input.error || (input.tool_response && input.tool_response.error);
+      persistEvent(makeEvent(
+        hasError ? "tool_call_failed" : "tool_call_completed",
+        hasError ? "error" : "allowed",
+        hasError ? "medium" : "info",
+        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+          action: inputSummary,
+          reason: hasError ? (input.error || "Tool returned an error") : null,
+          payload: { hook: "PostToolUse", cwd: input.cwd, error: input.error || null } }
+      ));
       break;
     }
 
-    case "stop": {
-      const event = createEvent("session_end", null, null, sessionId);
-      logEvent(event);
+    case "Stop": {
+      persistEvent(makeEvent(
+        "session_ended", "info", "info",
+        { session_id: sessionId, payload: { hook: "Stop" } }
+      ));
       break;
     }
+
+    default:
+      // Unknown hook event — log it and continue
+      persistEvent(makeEvent(
+        "tool_call_attempted", "info", "info",
+        { session_id: sessionId, payload: { hook: hookEvent, raw: input } }
+      ));
   }
+
+  // Clean up SQLite
+  if (db) { try { db.close(); } catch {} }
 }
 
-main().catch(() => process.exit(0)); // Never crash — that would block Claude Code
+main().catch((err) => {
+  // ALWAYS fail open. Never break the user's Claude Code workflow.
+  process.stderr.write("[sentinelflow] Handler error (failing open): " + (err.message || err) + "\\n");
+  if (db) { try { db.close(); } catch {} }
+  process.exit(0);
+});
 `;
   }
 
   // ─── Static Methods ─────────────────────────────────────────
 
-  /**
-   * Install SentinelFlow hooks into a Claude Code project.
-   * This is the main user-facing API for setup.
-   *
-   * Usage:
-   *   npx sentinelflow intercept --project ./my-project
-   *
-   * Or programmatically:
-   *   await ClaudeCodeInterceptor.install({ projectDir: "./my-project" });
-   */
   static async install(config: ClaudeCodeInterceptorConfig): Promise<ClaudeCodeInterceptor> {
     const interceptor = new ClaudeCodeInterceptor(config);
     await interceptor.start();
     return interceptor;
   }
 
-  /**
-   * Check if SentinelFlow hooks are installed in a project.
-   */
   static isInstalled(projectDir: string): boolean {
-    const handlerPath = path.join(projectDir, HOOKS_DIR, HANDLER_SCRIPT);
+    const handlerPath = path.join(projectDir, SF_DIR, HANDLER_SCRIPT);
     return fs.existsSync(handlerPath);
   }
 
-  /**
-   * Uninstall SentinelFlow hooks from a project.
-   */
   static async uninstall(projectDir: string): Promise<void> {
-    const hooksDir = path.join(projectDir, HOOKS_DIR);
-    const handlerPath = path.join(hooksDir, HANDLER_SCRIPT);
-    const hooksJsonPath = path.join(hooksDir, HOOKS_JSON);
+    const handlerPath = path.join(projectDir, SF_DIR, HANDLER_SCRIPT);
 
     if (fs.existsSync(handlerPath)) {
       fs.unlinkSync(handlerPath);
     }
 
-    // Only remove hooks.json if it only contains our hooks
-    if (fs.existsSync(hooksJsonPath)) {
+    // Remove hooks from both settings files
+    for (const settingsFile of [SETTINGS_LOCAL, SETTINGS_PROJECT]) {
+      const settingsPath = path.join(projectDir, CLAUDE_DIR, settingsFile);
+      if (!fs.existsSync(settingsPath)) continue;
+
       try {
-        const content = JSON.parse(fs.readFileSync(hooksJsonPath, "utf-8"));
-        const hasOnlySentinelflow =
-          JSON.stringify(content).includes("sentinelflow-handler");
-        if (hasOnlySentinelflow) {
-          fs.unlinkSync(hooksJsonPath);
+        const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        if (!settings.hooks) continue;
+
+        for (const eventName of Object.keys(settings.hooks)) {
+          settings.hooks[eventName] = (settings.hooks[eventName] as Array<Record<string, unknown>>).filter(
+            (entry) => {
+              const innerHooks = entry.hooks as Array<Record<string, string>> | undefined;
+              if (!innerHooks) return true;
+              return !innerHooks.some((h) =>
+                (h.command ?? "").includes("sentinelflow") || (h.command ?? "").includes(HANDLER_SCRIPT)
+              );
+            }
+          );
+          if ((settings.hooks[eventName] as unknown[]).length === 0) {
+            delete settings.hooks[eventName];
+          }
+        }
+
+        if (Object.keys(settings.hooks).length === 0) {
+          delete settings.hooks;
+        }
+
+        if (Object.keys(settings).length > 0) {
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        } else {
+          fs.unlinkSync(settingsPath);
         }
       } catch {
         // If we can't parse it, leave it alone

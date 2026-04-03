@@ -27,6 +27,13 @@ import {
   interceptStatusCommand,
   interceptTailCommand,
 } from "./commands/intercept";
+import { interceptTestCommand } from "./commands/intercept-test";
+import {
+  eventsTailCommand,
+  eventsBlockedCommand,
+  eventsStatsCommand,
+} from "./commands/events";
+import { costsCommand } from "./commands/costs";
 
 const program = new Command();
 
@@ -89,6 +96,62 @@ intercept
   .option("-n, --lines <count>", "Number of events to show", "20")
   .option("-f, --follow", "Follow the log in real-time")
   .action(interceptTailCommand);
+
+intercept
+  .command("test")
+  .description("Test the interceptor with a fixture or synthetic event")
+  .argument("[path]", "Project directory", ".")
+  .option("--fixture <file>", "JSON fixture file with a hook event")
+  .option("--tool <name>", "Tool name (e.g., Bash, Read, Write)")
+  .option("--input <json>", "Tool input as JSON string or plain command")
+  .option("--phase <phase>", "Hook phase: PreToolUse, PostToolUse", "PreToolUse")
+  .option("--mode <mode>", "Enforcement mode: monitor, enforce", "enforce")
+  .option("--blocklist <tools>", "Comma-separated tools to block")
+  .option("--allowlist <tools>", "Comma-separated tools to allow")
+  .action(interceptTestCommand);
+
+// ── sentinelflow events ─────────────────────────────────────
+const events = program
+  .command("events")
+  .description("Query the governance event store (SQLite)");
+
+events
+  .command("tail")
+  .description("Show recent events from the SQLite event store")
+  .argument("[path]", "Project directory", ".")
+  .option("--since <duration>", "Time window: 1h, 24h, 7d, 30d", "24h")
+  .option("--agent <id>", "Filter by agent ID")
+  .option("--tool <name>", "Filter by tool name")
+  .option("--limit <n>", "Max events to show", "50")
+  .option("--format <fmt>", "Output format: table, json", "table")
+  .action(eventsTailCommand);
+
+events
+  .command("blocked")
+  .description("Show blocked tool calls")
+  .argument("[path]", "Project directory", ".")
+  .option("--since <duration>", "Time window: 1d, 7d, 30d", "7d")
+  .option("--agent <id>", "Filter by agent ID")
+  .option("--limit <n>", "Max events to show", "50")
+  .option("--format <fmt>", "Output format: table, json", "table")
+  .action(eventsBlockedCommand);
+
+events
+  .command("stats")
+  .description("Show event store statistics")
+  .argument("[path]", "Project directory", ".")
+  .option("--format <fmt>", "Output format: table, json", "table")
+  .action(eventsStatsCommand);
+
+// ── sentinelflow costs ──────────────────────────────────────
+program
+  .command("costs")
+  .description("Token spend and cost report from the event store")
+  .argument("[path]", "Project directory", ".")
+  .option("--window <duration>", "Time window: 1d, 7d, 30d", "7d")
+  .option("--agent <id>", "Filter by agent ID")
+  .option("--format <fmt>", "Output format: table, json", "table")
+  .action(costsCommand);
 
 // ── sentinelflow registry ───────────────────────────────────
 const registry = program

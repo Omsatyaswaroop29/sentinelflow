@@ -40,7 +40,7 @@ export { BaseInterceptor } from "./base";
 export {
   ClaudeCodeInterceptor,
   type ClaudeCodeInterceptorConfig,
-  type ClaudeCodeHookEvent,
+  type ClaudeCodeHookInput,
   type ClaudeCodeHookDecision,
 } from "./claude-code";
 

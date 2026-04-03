@@ -86,11 +86,12 @@ export async function interceptInstallCommand(
 
   console.log("");
   console.log("  ✓ Hooks installed:");
-  console.log(`    hooks/hooks.json`);
-  console.log(`    hooks/sentinelflow-handler.js`);
+  console.log(`    .claude/settings.local.json  (hooks config)`);
+  console.log(`    .sentinelflow/handler.js      (event handler)`);
   console.log("");
   console.log("  Events will be logged to:");
-  console.log(`    .sentinelflow/events.jsonl`);
+  console.log(`    .sentinelflow/events.jsonl    (tail-able log)`);
+  console.log(`    .sentinelflow/events.db       (SQLite, if available)`);
   console.log("");
 
   if (mode === "monitor") {
@@ -120,6 +121,7 @@ export async function interceptUninstallCommand(
   console.log("");
   console.log("  ✓ SentinelFlow hooks removed.");
   console.log("    Event log preserved at .sentinelflow/events.jsonl");
+  console.log("    Event database preserved at .sentinelflow/events.db");
   console.log("");
 }
 

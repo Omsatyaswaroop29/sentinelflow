@@ -47,3 +47,33 @@ ignore:
     - reason: "Token budgets managed by platform-level rate limiting"
       approved_by: "platform-team"
       ticket: "PLAT-892"
+
+# ─── Runtime Policies (Phase 2) ──────────────────────────────
+# These policies are enforced at runtime by the SentinelFlow interceptor
+# when installed via `sentinelflow intercept install`.
+#
+# Runtime policies complement static scan rules by governing
+# agent behavior in real-time during Claude Code sessions.
+runtime_policies:
+  # Tools that are always blocked, regardless of context.
+  # Use this for tools that should never be called by agents.
+  blocked_tools:
+    # - NotebookEdit
+    # - TodoWrite
+
+  # If set, only these tools are allowed. Everything else is blocked.
+  # Leave empty/commented to allow all tools except blocked ones.
+  # allowed_tools:
+  #   - Read
+  #   - Grep
+  #   - ListDir
+  #   - Bash
+  #   - Write
+
+  # Maximum estimated cost (USD) per session before blocking.
+  # Set to 0 to disable cost budgeting.
+  # max_cost_per_session: 5.00
+
+  # Enforcement mode: "monitor" logs but never blocks; "enforce" blocks.
+  # Start with monitor, graduate to enforce after reviewing event logs.
+  enforcement_mode: monitor

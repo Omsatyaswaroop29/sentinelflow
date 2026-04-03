@@ -124,7 +124,7 @@ ignore:
 sentinelflow scan . --show-suppressed
 ```
 
-## Runtime Agent Firewall (Phase 2) 🆕
+## Runtime Agent Firewall (Phase 2 Beta) 🆕
 
 SentinelFlow now goes beyond static scanning. Install runtime hooks that intercept every tool call your AI agent makes — in real-time.
 
@@ -133,23 +133,35 @@ SentinelFlow now goes beyond static scanning. Install runtime hooks that interce
 sentinelflow intercept install . --mode monitor
 
 # Install with enforcement — actually block dangerous tool calls
-sentinelflow intercept install . --mode enforce --blocklist Bash,Write
+sentinelflow intercept install . --mode enforce --blocklist NotebookEdit
+
+# Test the interceptor without a live session
+sentinelflow intercept test . --tool Bash --input 'rm -rf /home/user'
 
 # Check what's happening
 sentinelflow intercept status .
 
-# Live-tail the event log
-sentinelflow intercept tail . -f
+# Query the governance event store (SQLite)
+sentinelflow events tail .               # recent events
+sentinelflow events blocked .            # blocked tool calls with reasons
+sentinelflow events stats .              # aggregate statistics
+sentinelflow costs . --window 7d         # token spend by agent
 
 # Remove hooks when done
 sentinelflow intercept uninstall .
 ```
 
-**What it intercepts:** Every `PreToolUse` event from Claude Code passes through SentinelFlow's policy engine. Built-in policies catch dangerous bash commands (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`), enforce tool allowlists/blocklists, track cost budgets, and enforce data boundary rules.
+**How it works:** Hooks are installed into `.claude/settings.local.json` using Claude Code's official hooks system. Every `PreToolUse` event passes through SentinelFlow's policy engine. The handler script at `.sentinelflow/handler.js` evaluates policies, writes events to both a JSONL log and a SQLite database, and returns allow/block decisions via exit codes.
+
+**Built-in policies:** Dangerous bash command detection (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`), tool allowlists/blocklists, and `.sentinelflow-policy.yaml` runtime rules.
 
 **Two modes:** Start with `monitor` to see what your agents are doing without breaking anything. Graduate to `enforce` when you're confident in your policies.
 
-**Event log:** All events are written to `.sentinelflow/events.jsonl` — a simple, grep-able, append-only log you can feed into any analytics pipeline.
+**Fail-open by default:** If the handler crashes or can't parse input, it exits 0 (allow). SentinelFlow never silently breaks your Claude Code workflow.
+
+**Event store:** All events are dual-written to `.sentinelflow/events.jsonl` (fast, tail-able, always works) and `.sentinelflow/events.db` (SQLite with indexed queries, rollups, dashboards). Query with `sentinelflow events tail` or connect any SQLite client.
+
+> **Beta notice:** The runtime interceptor is validated against the Claude Code hooks contract but should be tested in your environment before relying on it for production governance. The static scanner (Phase 1) is stable and recommended for CI/CD.
 
 ## Frameworks Supported
 
@@ -180,21 +192,63 @@ Every finding maps to at least two compliance frameworks.
 
 ## Architecture
 
-SentinelFlow is a monorepo with four packages.
+SentinelFlow is a monorepo with five packages.
 
-`@sentinelflow/core` — Universal agent schema, finding types, local registry with atomic writes.
+`@sentinelflow/core` — Universal agent schema, finding types, local registry with atomic writes, and the SQLite-backed governance event store (writer, reader, rollup computation, and query API).
 
 `@sentinelflow/parsers` — Six framework-specific parsers that normalize agent configs into the universal schema.
 
 `@sentinelflow/scanner` — 46 governance rules, suppression engine, SARIF/JSON/Markdown/terminal formatters.
 
-`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code, evaluates policies on every tool call, emits events.
+`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code via command hooks, evaluates policies on every tool call, emits events to listeners (console, JSONL, SQLite, alerts), and includes anomaly detection (novel tool, cost spike, error rate, privilege escalation).
 
-`sentinelflow` — CLI that ties it all together. This is the package you install.
+`sentinelflow` — CLI that ties it all together. This is the package you install. Includes static scan, runtime hook management, event store queries, and cost reporting.
 
 ## Validated Against Real Projects
 
 SentinelFlow was validated against [Everything Claude Code](https://github.com/affaan-m/everything-claude-code) (116K+ GitHub stars): 30 agents discovered, 133 findings (35 critical, 30 high, 64 medium), in 32ms.
+
+## Phase 2: Runtime Agent Firewall (Beta)
+
+SentinelFlow now includes a runtime layer that hooks into Claude Code sessions to monitor and govern agent tool calls in real time. This is currently in **beta** — the static scanner (v0.2.3) remains the stable, production-ready component.
+
+### What the Runtime Layer Does
+
+When you install SentinelFlow hooks into a Claude Code project, every tool call passes through a governance handler before (and after) execution. The handler evaluates policies, logs structured events to both JSONL and SQLite, and can optionally block dangerous operations.
+
+```bash
+# Install runtime hooks (start with monitor mode — logs everything, blocks nothing)
+sentinelflow intercept install --mode monitor
+
+# Run your Claude Code session normally — events are recorded silently
+claude
+
+# Review what happened
+sentinelflow events tail --since 1h
+sentinelflow events blocked --since 7d
+sentinelflow costs --window 7d
+
+# Test your policy configuration without a live session
+sentinelflow intercept test --tool Bash --input 'rm -rf /' --mode enforce
+
+# When ready, switch to enforce mode to actually block policy violations
+sentinelflow intercept install --mode enforce --blocklist NotebookEdit,TodoWrite
+
+# Uninstall when done (event history is preserved)
+sentinelflow intercept uninstall
+```
+
+### Built-in Policies
+
+The runtime layer includes five built-in policies: tool allowlist (only permit listed tools), tool blocklist (block specific tools), dangerous command detection (catches `rm -rf /`, `curl|bash`, `chmod 777`, `git push --force`, `npm publish`, and more), session cost budgets, and data boundary enforcement (block access to sensitive paths). Custom policies can be added via `.sentinelflow-policy.yaml`.
+
+### Event Store
+
+All runtime events are persisted to an append-only SQLite database at `.sentinelflow/events.db` (with JSONL fallback at `.sentinelflow/events.jsonl`). The database supports governance queries like blocked tool call history, cost-by-agent rollups, session summaries, and active agent inventory — all accessible through the CLI.
+
+### What Is NOT Handled Yet
+
+The runtime layer currently supports **Claude Code only**. LangChain, CrewAI, Cursor, and Copilot Studio interceptors are planned for Phase 3. Token/cost data from Claude Code hooks is not yet available (cost columns will be NULL). Dynamic policy reloading, multi-project dashboards, and advanced anomaly detection in the handler script are on the roadmap.
 
 ## Contributing
 
@@ -210,9 +264,11 @@ npx vitest run
 
 ## Roadmap
 
-**Phase 2** (In Progress) — ~~Runtime interceptors via Claude Code hooks~~ ✅. LangChain callbacks. Anomaly detection for token spend and tool invocation patterns. Event store with time-windowed queries. Live dashboard.
+**Phase 1** (Complete) — Static governance scanner with 46 rules, 6 framework parsers, SARIF output, compliance mappings to OWASP LLM Top 10, EU AI Act, NIST AI RMF, MITRE ATLAS, and more. Validated against Everything Claude Code (133 findings in 32ms).
 
-**Phase 3** (Months 4–6) — Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK.
+**Phase 2** (Beta) — Runtime agent firewall via Claude Code hooks. Policy evaluation on every tool call (allow/block/monitor). Append-only SQLite event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection (novel tool, cost spike, error rate, privilege escalation). Five built-in policies.
+
+**Phase 3** (Months 4–6) — LangChain and CrewAI interceptors. Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK. Live governance dashboard.
 
 **Phase 4** (Months 7–12) — Multi-tenant SaaS. SSO/SAML. SIEM integration. Shadow agent discovery across the organization.
 
