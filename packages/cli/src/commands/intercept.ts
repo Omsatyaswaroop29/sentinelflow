@@ -81,8 +81,10 @@ export async function interceptInstallCommand(
   });
 
   await interceptor.start();
-  // Stop immediately — hooks are persistent files, they don't need the process running
-  await interceptor.stop();
+  // NOTE: Do NOT call interceptor.stop() here.
+  // start() creates the persistent hook files (.claude/settings.local.json + .sentinelflow/handler.js).
+  // stop() would delete them via unhookFramework(). The hooks are files that persist
+  // on disk — they don't need a running process. Claude Code reads them directly.
 
   console.log("");
   console.log("  ✓ Hooks installed:");

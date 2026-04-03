@@ -527,6 +527,20 @@ const TOOL_BLOCKLIST = new Set(${JSON.stringify([...this._toolBlocklist])});
 const ENFORCEMENT_MODE = ${JSON.stringify(this.enforcementMode)};
 const MAX_INPUT_LENGTH = ${this._maxInputLength};
 
+// ─── Module resolution ────────────────────────────────────
+// The handler runs at .sentinelflow/handler.js but native modules like
+// better-sqlite3 live in the project's node_modules. Add resolution paths
+// so require() can find them.
+const _module = require("module");
+const _addPaths = [
+  path.join(PROJECT_DIR, "node_modules"),
+  path.join(PROJECT_DIR, "node_modules", ".pnpm", "node_modules"),
+  path.join(PROJECT_DIR, "..", "node_modules"),
+];
+for (const p of _addPaths) {
+  if (fs.existsSync(p) && !module.paths.includes(p)) module.paths.unshift(p);
+}
+
 // ─── SQLite (optional — graceful degradation) ───────────────
 let db = null;
 try {
