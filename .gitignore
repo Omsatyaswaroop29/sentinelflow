@@ -41,3 +41,13 @@ Thumbs.db
 .sentinelflow/events.jsonl
 .sentinelflow/events.jsonl.1
 .sentinelflow/handler.js
+
+# SentinelFlow runtime data
+.sentinelflow/events.db
+.sentinelflow/events.db-wal
+.sentinelflow/events.db-shm
+.sentinelflow/events.jsonl
+.sentinelflow/events.jsonl.1
+.sentinelflow/handler.js
+.claude/settings.local.json
+results.sarif
