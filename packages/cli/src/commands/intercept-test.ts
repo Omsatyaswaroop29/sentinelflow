@@ -12,14 +12,16 @@ import * as path from "path";
 import * as fs from "fs";
 import { execFile } from "child_process";
 
-type DetectedFramework = "claude-code" | "cursor" | null;
+type DetectedFramework = "claude-code" | "cursor" | "copilot" | null;
 
 function detectHandler(projectDir: string): { framework: DetectedFramework; handlerPath: string | null } {
   const ccHandler = path.join(projectDir, ".sentinelflow", "handler.js");
   const cursorHandler = path.join(projectDir, ".sentinelflow", "cursor-handler.js");
+  const copilotHandler = path.join(projectDir, ".sentinelflow", "copilot-handler.js");
 
   if (fs.existsSync(ccHandler)) return { framework: "claude-code", handlerPath: ccHandler };
   if (fs.existsSync(cursorHandler)) return { framework: "cursor", handlerPath: cursorHandler };
+  if (fs.existsSync(copilotHandler)) return { framework: "copilot", handlerPath: copilotHandler };
   return { framework: null, handlerPath: null };
 }
 
@@ -68,6 +70,8 @@ export async function interceptTestCommand(
     // Generate framework-appropriate JSON
     if (framework === "cursor") {
       eventJson = JSON.stringify(buildCursorEvent(options.tool, toolInput, projectDir));
+    } else if (framework === "copilot") {
+      eventJson = JSON.stringify(buildCopilotEvent(options.tool, toolInput, projectDir));
     } else {
       eventJson = JSON.stringify(buildClaudeCodeEvent(options.tool, toolInput, options.phase, projectDir));
     }
@@ -130,6 +134,7 @@ export async function interceptTestCommand(
   if (framework === "cursor") {
     displayCursorResult(result);
   } else {
+    // Claude Code and Copilot share the same exit-code-based blocking
     displayClaudeCodeResult(result);
   }
 
@@ -209,6 +214,26 @@ function buildCursorEvent(
     tool_input: JSON.stringify(toolInput ?? {}),
     command: "unknown-server",
     workspace_roots: [projectDir],
+  };
+}
+
+/**
+ * Build a GitHub Copilot format event.
+ * Key difference: toolArgs is a JSON STRING (not an object).
+ * Uses camelCase fields: toolName, toolArgs, hookEventName, sessionId.
+ */
+function buildCopilotEvent(
+  tool: string,
+  toolInput: Record<string, unknown> | undefined,
+  projectDir: string
+): Record<string, unknown> {
+  return {
+    timestamp: Date.now(),
+    cwd: projectDir,
+    sessionId: "test-session",
+    hookEventName: "PreToolUse",
+    toolName: tool.toLowerCase() === "shell" ? "bash" : tool,
+    toolArgs: JSON.stringify(toolInput ?? {}),  // Copilot sends toolArgs as a JSON STRING
   };
 }
 

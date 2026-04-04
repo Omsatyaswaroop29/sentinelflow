@@ -56,6 +56,16 @@ export {
   type CursorStopPayload,
 } from "./cursor";
 
+export {
+  CopilotInterceptor,
+  type CopilotInterceptorConfig,
+  type CopilotHookInput,
+  type CopilotPreToolUsePayload,
+  type CopilotPostToolUsePayload,
+  type CopilotSessionStartPayload,
+  type CopilotSessionEndPayload,
+} from "./copilot";
+
 // ─── Built-in Policies ──────────────────────────────────────────────
 export {
   ToolAllowlistPolicy,
