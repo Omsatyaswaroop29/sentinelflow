@@ -12,16 +12,18 @@ import * as path from "path";
 import * as fs from "fs";
 import { execFile } from "child_process";
 
-type DetectedFramework = "claude-code" | "cursor" | "copilot" | null;
+type DetectedFramework = "claude-code" | "cursor" | "copilot" | "codex" | null;
 
 function detectHandler(projectDir: string): { framework: DetectedFramework; handlerPath: string | null } {
   const ccHandler = path.join(projectDir, ".sentinelflow", "handler.js");
   const cursorHandler = path.join(projectDir, ".sentinelflow", "cursor-handler.js");
   const copilotHandler = path.join(projectDir, ".sentinelflow", "copilot-handler.js");
+  const codexHandler = path.join(projectDir, ".sentinelflow", "codex-handler.js");
 
   if (fs.existsSync(ccHandler)) return { framework: "claude-code", handlerPath: ccHandler };
   if (fs.existsSync(cursorHandler)) return { framework: "cursor", handlerPath: cursorHandler };
   if (fs.existsSync(copilotHandler)) return { framework: "copilot", handlerPath: copilotHandler };
+  if (fs.existsSync(codexHandler)) return { framework: "codex", handlerPath: codexHandler };
   return { framework: null, handlerPath: null };
 }
 
@@ -73,6 +75,7 @@ export async function interceptTestCommand(
     } else if (framework === "copilot") {
       eventJson = JSON.stringify(buildCopilotEvent(options.tool, toolInput, projectDir));
     } else {
+      // Claude Code and Codex share the same PascalCase format
       eventJson = JSON.stringify(buildClaudeCodeEvent(options.tool, toolInput, options.phase, projectDir));
     }
   } else {

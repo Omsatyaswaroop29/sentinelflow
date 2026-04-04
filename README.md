@@ -132,7 +132,7 @@ sentinelflow scan . --show-suppressed
 
 ## Runtime Agent Firewall (Phase 2 Beta)
 
-SentinelFlow intercepts every tool call your AI agent makes — in real-time — across **Claude Code, Cursor, and GitHub Copilot**.
+SentinelFlow intercepts every tool call your AI agent makes — in real-time — across **Claude Code, Cursor, GitHub Copilot, and Codex CLI**.
 
 ```bash
 # Claude Code — hooks via .claude/settings.local.json, blocks via exit code 2
@@ -143,6 +143,9 @@ sentinelflow intercept install . --framework cursor --mode enforce
 
 # GitHub Copilot — hooks via .github/hooks/sentinelflow.json, blocks via exit code 2
 sentinelflow intercept install . --framework copilot --mode enforce
+
+# Codex CLI — hooks via .codex/hooks.json, blocks via exit code 2 (same contract as Claude Code)
+sentinelflow intercept install . --framework codex --mode enforce
 
 # Auto-detect framework from project directory (if only one is present)
 sentinelflow intercept install . --mode enforce --blocklist NotebookEdit
@@ -163,7 +166,7 @@ sentinelflow costs . --window 7d         # token spend by agent
 sentinelflow intercept uninstall .
 ```
 
-**How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
+**How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot, `.sentinelflow/codex-handler.js` for Codex) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
 
 **Built-in policies:** 9 dangerous command patterns (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`, and more), tool allowlists/blocklists, MCP server blocklists (Cursor), and `.sentinelflow-policy.yaml` runtime rules.
 
@@ -171,7 +174,7 @@ sentinelflow intercept uninstall .
 
 **Fail-open by default:** If any handler crashes or can't parse input, it allows the tool call. SentinelFlow never silently breaks your development workflow.
 
-**Unified event store:** All events from all three frameworks are written to the same `.sentinelflow/events.jsonl` log and `.sentinelflow/events.db` SQLite database. A single `sentinelflow events tail .` command shows events from Claude Code, Cursor, and Copilot side by side.
+**Unified event store:** All events from all four frameworks are written to the same `.sentinelflow/events.jsonl` log and `.sentinelflow/events.db` SQLite database. A single `sentinelflow events tail .` command shows events from Claude Code, Cursor, Copilot, and Codex side by side.
 
 **Live-validated:** Tested against a real Claude Code v2.1.91 session where the handler successfully blocked `rm -rf /home/user/important-data` and Claude acknowledged the policy restriction. Each framework has a golden-path test suite validating the full contract.
 
@@ -182,7 +185,7 @@ sentinelflow intercept uninstall .
 | Claude Code | Full (46 rules) | **Live** | `.claude/settings.local.json` |
 | Cursor | Full (46 rules) | **Live** | `.cursor/hooks.json` |
 | GitHub Copilot | Via Codex parser | **Live** | `.github/hooks/sentinelflow.json` |
-| Codex / OpenCode | Full (46 rules) | Planned | |
+| Codex / OpenCode | Full (46 rules) | **Live** | `.codex/hooks.json` |
 | LangChain | Pattern-based | Planned (middleware) | |
 | CrewAI | Full (46 rules) | Planned | |
 | Kiro | Steering files | Planned | |
@@ -213,7 +216,7 @@ SentinelFlow is a monorepo with five packages.
 
 `@sentinelflow/scanner` — 46 governance rules, suppression engine, SARIF/JSON/Markdown/terminal formatters.
 
-`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code, Cursor, and GitHub Copilot via their official hooks systems, evaluates policies on every tool call, emits events to listeners (console, JSONL, SQLite, alerts), and includes anomaly detection (novel tool, cost spike, error rate, privilege escalation).
+`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code, Cursor, GitHub Copilot, and Codex CLI via their official hooks systems, evaluates policies on every tool call, emits events to listeners (console, JSONL, SQLite, alerts), and includes anomaly detection (novel tool, cost spike, error rate, privilege escalation).
 
 `sentinelflow` — CLI that ties it all together. This is the package you install. Includes static scan, runtime hook management, event store queries, and cost reporting.
 

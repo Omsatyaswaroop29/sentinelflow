@@ -66,6 +66,11 @@ export {
   type CopilotSessionEndPayload,
 } from "./copilot";
 
+export {
+  CodexInterceptor,
+  type CodexInterceptorConfig,
+} from "./codex";
+
 // ─── Built-in Policies ──────────────────────────────────────────────
 export {
   ToolAllowlistPolicy,

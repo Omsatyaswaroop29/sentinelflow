@@ -11,15 +11,16 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { ClaudeCodeInterceptor, CursorInterceptor, CopilotInterceptor } from "@sentinelflow/interceptors";
+import { ClaudeCodeInterceptor, CursorInterceptor, CopilotInterceptor, CodexInterceptor } from "@sentinelflow/interceptors";
 
-type Framework = "claude-code" | "cursor" | "copilot";
+type Framework = "claude-code" | "cursor" | "copilot" | "codex";
 
 function detectFrameworks(projectDir: string): Framework[] {
   const found: Framework[] = [];
   if (fs.existsSync(path.join(projectDir, ".claude"))) found.push("claude-code");
   if (fs.existsSync(path.join(projectDir, ".cursor"))) found.push("cursor");
   if (fs.existsSync(path.join(projectDir, ".github"))) found.push("copilot");
+  if (fs.existsSync(path.join(projectDir, ".codex"))) found.push("codex");
   return found;
 }
 
@@ -29,7 +30,8 @@ function resolveFramework(projectDir: string, explicit?: string): Framework {
     if (n === "claude-code" || n === "claude" || n === "cc") return "claude-code";
     if (n === "cursor") return "cursor";
     if (n === "copilot" || n === "github-copilot" || n === "gh") return "copilot";
-    console.error(`\n  Unknown framework: "${explicit}". Supported: claude-code, cursor, copilot\n`);
+    if (n === "codex" || n === "openai-codex" || n === "opencode") return "codex";
+    console.error(`\n  Unknown framework: "${explicit}". Supported: claude-code, cursor, copilot, codex\n`);
     process.exit(1);
   }
 
@@ -47,6 +49,7 @@ function resolveFramework(projectDir: string, explicit?: string): Framework {
   if (ClaudeCodeInterceptor.isInstalled(projectDir)) return "claude-code";
   if (CursorInterceptor.isInstalled(projectDir)) return "cursor";
   if (CopilotInterceptor.isInstalled(projectDir)) return "copilot";
+  if (CodexInterceptor.isInstalled(projectDir)) return "codex";
 
   console.log(`\n  Multiple frameworks detected: ${detected.join(", ")}.`);
   console.log("  Use --framework to specify which one:");
@@ -60,6 +63,7 @@ function isInstalled(projectDir: string): { installed: boolean; framework?: Fram
   if (ClaudeCodeInterceptor.isInstalled(projectDir)) return { installed: true, framework: "claude-code" };
   if (CursorInterceptor.isInstalled(projectDir)) return { installed: true, framework: "cursor" };
   if (CopilotInterceptor.isInstalled(projectDir)) return { installed: true, framework: "copilot" };
+  if (CodexInterceptor.isInstalled(projectDir)) return { installed: true, framework: "codex" };
   return { installed: false };
 }
 
@@ -93,7 +97,8 @@ export async function interceptInstallCommand(
     console.log(`\n  Reinstalling ${framework} hooks...`);
     if (framework === "claude-code") await ClaudeCodeInterceptor.uninstall(projectDir);
     else if (framework === "cursor") CursorInterceptor.uninstall(projectDir);
-    else CopilotInterceptor.uninstall(projectDir);
+    else if (framework === "copilot") CopilotInterceptor.uninstall(projectDir);
+    else CodexInterceptor.uninstall(projectDir);
   }
 
   // Install
@@ -109,11 +114,16 @@ export async function interceptInstallCommand(
     console.log("\n  Hooks installed:");
     console.log("    .cursor/hooks.json               (hooks config)");
     console.log("    .sentinelflow/cursor-handler.js   (event handler)");
-  } else {
+  } else if (framework === "copilot") {
     await new CopilotInterceptor(commonConfig).start();
     console.log("\n  Hooks installed:");
     console.log("    .github/hooks/sentinelflow.json   (hooks config)");
     console.log("    .sentinelflow/copilot-handler.js  (event handler)");
+  } else {
+    await new CodexInterceptor(commonConfig).start();
+    console.log("\n  Hooks installed:");
+    console.log("    .codex/hooks.json                 (hooks config)");
+    console.log("    .sentinelflow/codex-handler.js    (event handler)");
   }
 
   console.log("");
@@ -141,7 +151,8 @@ export async function interceptUninstallCommand(
 
   if (framework === "claude-code") await ClaudeCodeInterceptor.uninstall(projectDir);
   else if (framework === "cursor") CursorInterceptor.uninstall(projectDir);
-  else CopilotInterceptor.uninstall(projectDir);
+  else if (framework === "copilot") CopilotInterceptor.uninstall(projectDir);
+  else CodexInterceptor.uninstall(projectDir);
 
   console.log(`\n  SentinelFlow ${framework} hooks removed.\n`);
 }
@@ -159,6 +170,7 @@ export async function interceptStatusCommand(targetPath: string): Promise<void> 
   console.log(`  Claude Code:  ${ClaudeCodeInterceptor.isInstalled(projectDir) ? "installed" : "-"}`);
   console.log(`  Cursor:       ${CursorInterceptor.isInstalled(projectDir) ? "installed" : "-"}`);
   console.log(`  Copilot:      ${CopilotInterceptor.isInstalled(projectDir) ? "installed" : "-"}`);
+  console.log(`  Codex:        ${CodexInterceptor.isInstalled(projectDir) ? "installed" : "-"}`);
 
   if (fs.existsSync(logPath)) {
     const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean);
