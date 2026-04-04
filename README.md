@@ -1,9 +1,15 @@
 # SentinelFlow
 
-**The governance scanner for AI agents.** Scans Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro configurations for security misconfigurations, compliance gaps, and excessive agent permissions — before they reach production.
+**The governance platform for AI agents.** Scans Claude Code, Cursor, GitHub Copilot, Codex, LangChain, CrewAI, and Kiro configurations for security misconfigurations — and intercepts dangerous tool calls at runtime before they execute.
 
 ```bash
+# Static scanning — find security issues in agent configs
 npx sentinelflow scan .
+
+# Runtime interception — block dangerous tool calls in real-time
+npx sentinelflow intercept install . --framework claude-code --mode enforce
+npx sentinelflow intercept install . --framework cursor --mode enforce
+npx sentinelflow intercept install . --framework copilot --mode enforce
 ```
 
 ```
@@ -124,15 +130,21 @@ ignore:
 sentinelflow scan . --show-suppressed
 ```
 
-## Runtime Agent Firewall (Phase 2 Beta) 🆕
+## Runtime Agent Firewall (Phase 2 Beta)
 
-SentinelFlow now goes beyond static scanning. Install runtime hooks that intercept every tool call your AI agent makes — in real-time.
+SentinelFlow intercepts every tool call your AI agent makes — in real-time — across **Claude Code, Cursor, and GitHub Copilot**.
 
 ```bash
-# Install hooks into a Claude Code project (monitor mode — logs everything, blocks nothing)
-sentinelflow intercept install . --mode monitor
+# Claude Code — hooks via .claude/settings.local.json, blocks via exit code 2
+sentinelflow intercept install . --framework claude-code --mode enforce
 
-# Install with enforcement — actually block dangerous tool calls
+# Cursor — hooks via .cursor/hooks.json, blocks via stdout JSON { permission: deny }
+sentinelflow intercept install . --framework cursor --mode enforce
+
+# GitHub Copilot — hooks via .github/hooks/sentinelflow.json, blocks via exit code 2
+sentinelflow intercept install . --framework copilot --mode enforce
+
+# Auto-detect framework from project directory (if only one is present)
 sentinelflow intercept install . --mode enforce --blocklist NotebookEdit
 
 # Test the interceptor without a live session
@@ -141,8 +153,8 @@ sentinelflow intercept test . --tool Bash --input 'rm -rf /home/user'
 # Check what's happening
 sentinelflow intercept status .
 
-# Query the governance event store (SQLite)
-sentinelflow events tail .               # recent events
+# Query the governance event store
+sentinelflow events tail .               # recent events across all frameworks
 sentinelflow events blocked .            # blocked tool calls with reasons
 sentinelflow events stats .              # aggregate statistics
 sentinelflow costs . --window 7d         # token spend by agent
@@ -151,28 +163,29 @@ sentinelflow costs . --window 7d         # token spend by agent
 sentinelflow intercept uninstall .
 ```
 
-**How it works:** Hooks are installed into `.claude/settings.local.json` using Claude Code's official hooks system. Every `PreToolUse` event passes through SentinelFlow's policy engine. The handler script at `.sentinelflow/handler.js` evaluates policies, writes events to both a JSONL log and a SQLite database, and returns allow/block decisions via exit codes.
+**How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
 
-**Built-in policies:** Dangerous bash command detection (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`), tool allowlists/blocklists, and `.sentinelflow-policy.yaml` runtime rules.
+**Built-in policies:** 9 dangerous command patterns (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`, and more), tool allowlists/blocklists, MCP server blocklists (Cursor), and `.sentinelflow-policy.yaml` runtime rules.
 
-**Two modes:** Start with `monitor` to see what your agents are doing without breaking anything. Graduate to `enforce` when you're confident in your policies.
+**Two modes:** `monitor` logs everything but never blocks — start here. `enforce` actually blocks dangerous tool calls, with the block reason fed back to the AI model.
 
-**Fail-open by default:** If the handler crashes or can't parse input, it exits 0 (allow). SentinelFlow never silently breaks your Claude Code workflow.
+**Fail-open by default:** If any handler crashes or can't parse input, it allows the tool call. SentinelFlow never silently breaks your development workflow.
 
-**Event store:** All events are dual-written to `.sentinelflow/events.jsonl` (fast, tail-able, always works) and `.sentinelflow/events.db` (SQLite with indexed queries, rollups, dashboards). Query with `sentinelflow events tail` or connect any SQLite client.
+**Unified event store:** All events from all three frameworks are written to the same `.sentinelflow/events.jsonl` log and `.sentinelflow/events.db` SQLite database. A single `sentinelflow events tail .` command shows events from Claude Code, Cursor, and Copilot side by side.
 
-> **Beta notice:** The runtime interceptor is validated against the Claude Code hooks contract but should be tested in your environment before relying on it for production governance. The static scanner (Phase 1) is stable and recommended for CI/CD.
+**Live-validated:** Tested against a real Claude Code v2.1.91 session where the handler successfully blocked `rm -rf /home/user/important-data` and Claude acknowledged the policy restriction. Each framework has a golden-path test suite validating the full contract.
 
 ## Frameworks Supported
 
-| Framework | Config Locations | Parser Status |
-|-----------|-----------------|---------------|
-| Claude Code | `.claude/settings.json`, `CLAUDE.md`, `AGENTS.md`, `agents/*.md` | Full |
-| Cursor | `.cursor/rules/*.mdc`, `.cursorrules`, `.cursor/mcp.json` | Full |
-| Codex / OpenCode | `.codex/config.toml`, `codex.md`, `.agents/*.md` | Full |
-| LangChain | Python source files, `pyproject.toml`, `langgraph.json` | Pattern-based |
-| CrewAI | `crew.yaml`, `agents.yaml`, `tasks.yaml` | Full |
-| Kiro | `.kiro/steering/*.md`, `.kiro/specs/*.md` | Steering files |
+| Framework | Static Scanning | Runtime Interception | Hook Config Location |
+|-----------|:-:|:-:|---|
+| Claude Code | Full (46 rules) | **Live** | `.claude/settings.local.json` |
+| Cursor | Full (46 rules) | **Live** | `.cursor/hooks.json` |
+| GitHub Copilot | Via Codex parser | **Live** | `.github/hooks/sentinelflow.json` |
+| Codex / OpenCode | Full (46 rules) | Planned | |
+| LangChain | Pattern-based | Planned (middleware) | |
+| CrewAI | Full (46 rules) | Planned | |
+| Kiro | Steering files | Planned | |
 
 See [Framework Support Matrix](docs/FRAMEWORK-SUPPORT.md) for detailed coverage and known limitations.
 
@@ -200,7 +213,7 @@ SentinelFlow is a monorepo with five packages.
 
 `@sentinelflow/scanner` — 46 governance rules, suppression engine, SARIF/JSON/Markdown/terminal formatters.
 
-`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code via command hooks, evaluates policies on every tool call, emits events to listeners (console, JSONL, SQLite, alerts), and includes anomaly detection (novel tool, cost spike, error rate, privilege escalation).
+`@sentinelflow/interceptors` — Runtime agent firewall. Hooks into Claude Code, Cursor, and GitHub Copilot via their official hooks systems, evaluates policies on every tool call, emits events to listeners (console, JSONL, SQLite, alerts), and includes anomaly detection (novel tool, cost spike, error rate, privilege escalation).
 
 `sentinelflow` — CLI that ties it all together. This is the package you install. Includes static scan, runtime hook management, event store queries, and cost reporting.
 
@@ -208,47 +221,6 @@ SentinelFlow is a monorepo with five packages.
 
 SentinelFlow was validated against [Everything Claude Code](https://github.com/affaan-m/everything-claude-code) (116K+ GitHub stars): 30 agents discovered, 133 findings (35 critical, 30 high, 64 medium), in 32ms.
 
-## Phase 2: Runtime Agent Firewall (Beta)
-
-SentinelFlow now includes a runtime layer that hooks into Claude Code sessions to monitor and govern agent tool calls in real time. This is currently in **beta** — the static scanner (v0.2.3) remains the stable, production-ready component.
-
-### What the Runtime Layer Does
-
-When you install SentinelFlow hooks into a Claude Code project, every tool call passes through a governance handler before (and after) execution. The handler evaluates policies, logs structured events to both JSONL and SQLite, and can optionally block dangerous operations.
-
-```bash
-# Install runtime hooks (start with monitor mode — logs everything, blocks nothing)
-sentinelflow intercept install --mode monitor
-
-# Run your Claude Code session normally — events are recorded silently
-claude
-
-# Review what happened
-sentinelflow events tail --since 1h
-sentinelflow events blocked --since 7d
-sentinelflow costs --window 7d
-
-# Test your policy configuration without a live session
-sentinelflow intercept test --tool Bash --input 'rm -rf /' --mode enforce
-
-# When ready, switch to enforce mode to actually block policy violations
-sentinelflow intercept install --mode enforce --blocklist NotebookEdit,TodoWrite
-
-# Uninstall when done (event history is preserved)
-sentinelflow intercept uninstall
-```
-
-### Built-in Policies
-
-The runtime layer includes five built-in policies: tool allowlist (only permit listed tools), tool blocklist (block specific tools), dangerous command detection (catches `rm -rf /`, `curl|bash`, `chmod 777`, `git push --force`, `npm publish`, and more), session cost budgets, and data boundary enforcement (block access to sensitive paths). Custom policies can be added via `.sentinelflow-policy.yaml`.
-
-### Event Store
-
-All runtime events are persisted to an append-only SQLite database at `.sentinelflow/events.db` (with JSONL fallback at `.sentinelflow/events.jsonl`). The database supports governance queries like blocked tool call history, cost-by-agent rollups, session summaries, and active agent inventory — all accessible through the CLI.
-
-### What Is NOT Handled Yet
-
-The runtime layer currently supports **Claude Code only**. LangChain, CrewAI, Cursor, and Copilot Studio interceptors are planned for Phase 3. Token/cost data from Claude Code hooks is not yet available (cost columns will be NULL). Dynamic policy reloading, multi-project dashboards, and advanced anomaly detection in the handler script are on the roadmap.
 
 ## Contributing
 
@@ -266,9 +238,9 @@ npx vitest run
 
 **Phase 1** (Complete) — Static governance scanner with 46 rules, 6 framework parsers, SARIF output, compliance mappings to OWASP LLM Top 10, EU AI Act, NIST AI RMF, MITRE ATLAS, and more. Validated against Everything Claude Code (133 findings in 32ms).
 
-**Phase 2** (Beta) — Runtime agent firewall via Claude Code hooks. Policy evaluation on every tool call (allow/block/monitor). Append-only SQLite event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection (novel tool, cost spike, error rate, privilege escalation). Five built-in policies.
+**Phase 2** (Beta) — Runtime agent firewall for Claude Code, Cursor, and GitHub Copilot. Policy evaluation on every tool call (allow/block/monitor). Each framework uses its native hooks contract. Unified append-only event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection. Five built-in policies.
 
-**Phase 3** (Months 4–6) — LangChain and CrewAI interceptors. Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK. Live governance dashboard.
+**Phase 3** (Months 4–6) — LangChain middleware interceptor. CrewAI task-level hooks. Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK. Minimal operational dashboard.
 
 **Phase 4** (Months 7–12) — Multi-tenant SaaS. SSO/SAML. SIEM integration. Shadow agent discovery across the organization.
 

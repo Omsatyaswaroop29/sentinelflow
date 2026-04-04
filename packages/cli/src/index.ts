@@ -40,7 +40,7 @@ const program = new Command();
 program
   .name("sentinelflow")
   .description("The vendor-neutral governance layer for enterprise AI agents")
-  .version("0.3.0");
+  .version("0.3.1");
 
 // ── sentinelflow scan ───────────────────────────────────────
 program

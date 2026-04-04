@@ -1,7 +1,7 @@
 {
   "name": "sentinelflow",
-  "version": "0.3.0",
-  "description": "AI agent governance platform — static scanning + runtime interception for Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro. Blocks dangerous tool calls in real-time.",
+  "version": "0.3.1",
+  "description": "AI agent governance platform — static scanning + runtime interception for Claude Code, Cursor, GitHub Copilot, Codex, LangChain, CrewAI, and Kiro. Blocks dangerous tool calls in real-time.",
   "main": "dist/bundle.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -30,6 +30,7 @@
     "firewall",
     "claude-code",
     "cursor",
+    "github-copilot",
     "codex",
     "langchain",
     "crewai",

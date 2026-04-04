@@ -460,8 +460,10 @@ function summarizeToolArgs(toolName, parsedArgs) {
   const sessionId = input.sessionId || input.session_id || "unknown";
 
   // Determine event type
+  // IMPORTANT: Check specific hookEventName FIRST, then fall back to field heuristics.
+  // postToolUse also has toolName, so checking toolName first would misclassify it.
   let eventType = "unknown";
-  if (hookEvent.includes("pretooluse") || input.toolName) {
+  if (hookEvent.includes("pretooluse")) {
     eventType = "preToolUse";
   } else if (hookEvent.includes("posttooluse")) {
     eventType = "postToolUse";
@@ -474,7 +476,8 @@ function summarizeToolArgs(toolName, parsedArgs) {
   } else if (hookEvent.includes("prompt")) {
     eventType = "userPromptSubmitted";
   } else if (input.toolName) {
-    eventType = "preToolUse"; // fallback: if toolName is present, likely preToolUse
+    // Fallback: if hookEventName is missing but toolName is present, assume preToolUse
+    eventType = "preToolUse";
   }
 
   try {

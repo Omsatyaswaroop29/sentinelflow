@@ -1,6 +1,6 @@
 {
   "name": "sentinelflow",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "private": true,
   "description": "The vendor-neutral governance layer for enterprise AI agents",
   "author": "Om Satya Swaroop",
