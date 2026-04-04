@@ -1,7 +1,7 @@
 {
   "name": "sentinelflow",
-  "version": "0.2.3",
-  "description": "The vendor-neutral governance scanner for AI agents. Scans Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro configs for security and compliance issues.",
+  "version": "0.3.0",
+  "description": "AI agent governance platform — static scanning + runtime interception for Claude Code, Cursor, Codex, LangChain, CrewAI, and Kiro. Blocks dangerous tool calls in real-time.",
   "main": "dist/bundle.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -24,18 +24,25 @@
     "governance",
     "security",
     "scanner",
+    "runtime",
+    "interceptor",
+    "hooks",
+    "firewall",
     "claude-code",
     "cursor",
     "codex",
     "langchain",
     "crewai",
+    "kiro",
     "llm",
     "compliance",
     "eu-ai-act",
     "owasp",
     "sarif",
     "sast",
-    "devsecops"
+    "devsecops",
+    "agent-governance",
+    "tool-blocking"
   ],
   "scripts": {
     "build": "tsc && node ../../scripts/bundle.js",
@@ -46,11 +53,13 @@
   },
   "dependencies": {
     "commander": "^13.0.0",
-    "better-sqlite3": "^11.8.0",
-    "@sentinelflow/core": "workspace:*",
-    "@sentinelflow/interceptors": "workspace:*"
+    "better-sqlite3": "^11.8.0"
   },
   "devDependencies": {
+    "@sentinelflow/core": "workspace:*",
+    "@sentinelflow/interceptors": "workspace:*",
+    "@sentinelflow/parsers": "workspace:*",
+    "@sentinelflow/scanner": "workspace:*",
     "vitest": "^2.1.0",
     "typescript": "^5.7.0"
   }

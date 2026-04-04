@@ -41,7 +41,7 @@ export function formatTerminal(result: ScanResult): string {
   // Header
   lines.push("");
   lines.push(
-    `  ${BOLD}${CYAN}SentinelFlow v0.2.0${RESET} ${DIM}— Agent Governance Scanner${RESET}`
+    `  ${BOLD}${CYAN}SentinelFlow v0.3.0${RESET} ${DIM}— Agent Governance Platform${RESET}`
   );
   lines.push("");
   lines.push(`  Scanning ${BOLD}${report.root_dir}${RESET}...`);
