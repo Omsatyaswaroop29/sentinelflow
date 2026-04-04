@@ -44,6 +44,18 @@ export {
   type ClaudeCodeHookDecision,
 } from "./claude-code";
 
+export {
+  CursorInterceptor,
+  type CursorInterceptorConfig,
+  type CursorHookInput,
+  type CursorHookResponse,
+  type CursorBeforeShellPayload,
+  type CursorBeforeMCPPayload,
+  type CursorBeforeReadFilePayload,
+  type CursorAfterFileEditPayload,
+  type CursorStopPayload,
+} from "./cursor";
+
 // ─── Built-in Policies ──────────────────────────────────────────────
 export {
   ToolAllowlistPolicy,

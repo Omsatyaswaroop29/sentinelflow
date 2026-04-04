@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "beforeShellExecution",
+  "conversation_id": "cursor-test-conv-001",
+  "generation_id": "cursor-test-gen-001",
+  "command": "npm test",
+  "cwd": "/tmp/test-project",
+  "workspace_roots": ["/tmp/test-project"]
+}

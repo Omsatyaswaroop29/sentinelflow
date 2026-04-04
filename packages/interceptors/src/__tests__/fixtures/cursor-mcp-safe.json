@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "beforeMCPExecution",
+  "conversation_id": "cursor-test-conv-001",
+  "generation_id": "cursor-test-gen-003",
+  "tool_name": "gitbutler_update_branches",
+  "tool_input": "{\"changesSummary\": \"Added README\"}",
+  "command": "but",
+  "workspace_roots": ["/tmp/test-project"]
+}

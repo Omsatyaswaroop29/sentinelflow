@@ -71,6 +71,7 @@ intercept
   .command("install")
   .description("Install runtime governance hooks into a project")
   .argument("[path]", "Project directory", ".")
+  .option("--framework <fw>", "Framework: claude-code, cursor (auto-detected if omitted)")
   .option("--mode <mode>", "Enforcement mode: monitor, enforce", "monitor")
   .option("--blocklist <tools>", "Comma-separated tools to block")
   .option("--allowlist <tools>", "Comma-separated tools to allow (blocks all others)")
@@ -81,6 +82,7 @@ intercept
   .command("uninstall")
   .description("Remove runtime hooks from a project")
   .argument("[path]", "Project directory", ".")
+  .option("--framework <fw>", "Framework to uninstall: claude-code, cursor")
   .action(interceptUninstallCommand);
 
 intercept

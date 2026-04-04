@@ -1,25 +1,108 @@
 /**
  * sentinelflow intercept — Runtime agent firewall commands.
  *
+ * Supports multiple frameworks:
+ *   - Claude Code: hooks in .claude/settings.local.json
+ *   - Cursor:      hooks in .cursor/hooks.json
+ *
+ * Auto-detects the framework from the project directory, or use --framework.
+ *
  * Usage:
- *   sentinelflow intercept install [path]   Install runtime hooks into a project
+ *   sentinelflow intercept install [path]    Install runtime hooks
  *   sentinelflow intercept uninstall [path]  Remove runtime hooks
- *   sentinelflow intercept status [path]    Check if hooks are installed
- *   sentinelflow intercept tail [path]      Live-tail the event log
- *
- * The install command generates:
- *   hooks/hooks.json              — Claude Code hook config
- *   hooks/sentinelflow-handler.js — Event handler script
- *   .sentinelflow/events.jsonl    — Runtime event log (created on first event)
- *
- * Enforcement modes:
- *   --mode monitor  (default) Log everything, block nothing. Start here.
- *   --mode enforce  Actually block tool calls that violate policy.
+ *   sentinelflow intercept status [path]     Check hook status
+ *   sentinelflow intercept tail [path]       View recent events
  */
 
 import * as path from "path";
 import * as fs from "fs";
-import { ClaudeCodeInterceptor } from "@sentinelflow/interceptors";
+import { ClaudeCodeInterceptor, CursorInterceptor } from "@sentinelflow/interceptors";
+
+// ─── Framework Detection ────────────────────────────────────────────
+
+type Framework = "claude-code" | "cursor";
+
+/**
+ * Auto-detect which AI coding framework is present in the project.
+ * Checks for characteristic directories and config files.
+ * If both are present, returns both so the user can choose.
+ */
+function detectFrameworks(projectDir: string): Framework[] {
+  const found: Framework[] = [];
+
+  // Claude Code markers
+  const claudeDir = path.join(projectDir, ".claude");
+  if (fs.existsSync(claudeDir)) {
+    found.push("claude-code");
+  }
+
+  // Cursor markers
+  const cursorDir = path.join(projectDir, ".cursor");
+  if (fs.existsSync(cursorDir)) {
+    found.push("cursor");
+  }
+
+  return found;
+}
+
+/**
+ * Resolve which framework to use based on explicit flag or auto-detection.
+ */
+function resolveFramework(projectDir: string, explicit?: string): Framework {
+  if (explicit) {
+    const normalized = explicit.toLowerCase().replace(/\s+/g, "-");
+    if (normalized === "claude-code" || normalized === "claude" || normalized === "cc") {
+      return "claude-code";
+    }
+    if (normalized === "cursor") {
+      return "cursor";
+    }
+    console.error(`\n  Unknown framework: "${explicit}"`);
+    console.error(`  Supported: claude-code, cursor\n`);
+    process.exit(1);
+  }
+
+  const detected = detectFrameworks(projectDir);
+
+  if (detected.length === 0) {
+    // No framework detected — create .cursor by default since hooks.json
+    // is self-contained, or let the user specify
+    console.log("\n  No .claude/ or .cursor/ directory found.");
+    console.log("  Use --framework to specify: claude-code or cursor\n");
+    process.exit(1);
+  }
+
+  if (detected.length === 1) {
+    return detected[0]!;
+  }
+
+  // Both detected — prefer Claude Code if hooks are already installed there
+  if (ClaudeCodeInterceptor.isInstalled(projectDir)) {
+    return "claude-code";
+  }
+  if (CursorInterceptor.isInstalled(projectDir)) {
+    return "cursor";
+  }
+
+  // Both exist, neither has hooks — ask user
+  console.log("\n  Multiple frameworks detected: Claude Code and Cursor.");
+  console.log("  Use --framework to specify which one:");
+  console.log("    sentinelflow intercept install --framework claude-code");
+  console.log("    sentinelflow intercept install --framework cursor\n");
+  process.exit(1);
+}
+
+function isInstalled(projectDir: string): { installed: boolean; framework?: Framework } {
+  if (ClaudeCodeInterceptor.isInstalled(projectDir)) {
+    return { installed: true, framework: "claude-code" };
+  }
+  if (CursorInterceptor.isInstalled(projectDir)) {
+    return { installed: true, framework: "cursor" };
+  }
+  return { installed: false };
+}
+
+// ─── Install Command ────────────────────────────────────────────────
 
 export async function interceptInstallCommand(
   targetPath: string,
@@ -28,18 +111,19 @@ export async function interceptInstallCommand(
     blocklist?: string;
     allowlist?: string;
     budget?: string;
+    framework?: string;
   }
 ): Promise<void> {
   const projectDir = path.resolve(targetPath);
 
   if (!fs.existsSync(projectDir)) {
-    console.error(`\n  ❌ Directory not found: ${projectDir}\n`);
+    console.error(`\n  Error: Directory not found: ${projectDir}\n`);
     process.exit(1);
   }
 
+  const framework = resolveFramework(projectDir, options.framework);
   const mode = (options.mode ?? "monitor") as "monitor" | "enforce";
 
-  // Parse tool lists
   const toolBlocklist = options.blocklist
     ? options.blocklist.split(",").map((t) => t.trim())
     : undefined;
@@ -49,9 +133,10 @@ export async function interceptInstallCommand(
 
   console.log("");
   console.log("  SentinelFlow Runtime Agent Firewall");
-  console.log("  ───────────────────────────────────");
+  console.log("  -----------------------------------");
   console.log("");
   console.log(`  Project:     ${projectDir}`);
+  console.log(`  Framework:   ${framework}`);
   console.log(`  Mode:        ${mode}`);
 
   if (toolBlocklist) {
@@ -60,36 +145,55 @@ export async function interceptInstallCommand(
   if (toolAllowlist) {
     console.log(`  Allowlist:   ${toolAllowlist.join(", ")}`);
   }
-  if (options.budget) {
-    console.log(`  Budget:      $${options.budget}/session`);
+
+  // Check if already installed (possibly for a different framework)
+  const existing = isInstalled(projectDir);
+  if (existing.installed) {
+    if (existing.framework !== framework) {
+      console.log("");
+      console.log(`  Note: ${existing.framework} hooks already installed. Adding ${framework} hooks alongside.`);
+    } else {
+      console.log("");
+      console.log(`  Reinstalling ${framework} hooks...`);
+      if (framework === "claude-code") {
+        await ClaudeCodeInterceptor.uninstall(projectDir);
+      } else {
+        CursorInterceptor.uninstall(projectDir);
+      }
+    }
   }
 
-  // Check if already installed
-  if (ClaudeCodeInterceptor.isInstalled(projectDir)) {
+  // Install the appropriate interceptor
+  if (framework === "claude-code") {
+    const interceptor = new ClaudeCodeInterceptor({
+      projectDir,
+      enforcement_mode: mode,
+      toolBlocklist,
+      toolAllowlist,
+      log_level: "silent",
+    });
+    await interceptor.start();
+
     console.log("");
-    console.log("  ⚠️  Hooks already installed. Reinstalling...");
-    await ClaudeCodeInterceptor.uninstall(projectDir);
+    console.log("  Hooks installed:");
+    console.log(`    .claude/settings.local.json  (hooks config)`);
+    console.log(`    .sentinelflow/handler.js      (event handler)`);
+  } else {
+    const interceptor = new CursorInterceptor({
+      projectDir,
+      enforcement_mode: mode,
+      toolBlocklist,
+      toolAllowlist,
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    console.log("");
+    console.log("  Hooks installed:");
+    console.log(`    .cursor/hooks.json               (hooks config)`);
+    console.log(`    .sentinelflow/cursor-handler.js   (event handler)`);
   }
 
-  // Install the interceptor
-  const interceptor = new ClaudeCodeInterceptor({
-    projectDir,
-    enforcement_mode: mode,
-    toolBlocklist,
-    toolAllowlist,
-    log_level: "silent", // Don't spam the terminal during install
-  });
-
-  await interceptor.start();
-  // NOTE: Do NOT call interceptor.stop() here.
-  // start() creates the persistent hook files (.claude/settings.local.json + .sentinelflow/handler.js).
-  // stop() would delete them via unhookFramework(). The hooks are files that persist
-  // on disk — they don't need a running process. Claude Code reads them directly.
-
-  console.log("");
-  console.log("  ✓ Hooks installed:");
-  console.log(`    .claude/settings.local.json  (hooks config)`);
-  console.log(`    .sentinelflow/handler.js      (event handler)`);
   console.log("");
   console.log("  Events will be logged to:");
   console.log(`    .sentinelflow/events.jsonl    (tail-able log)`);
@@ -97,101 +201,95 @@ export async function interceptInstallCommand(
   console.log("");
 
   if (mode === "monitor") {
-    console.log("  📊 Monitor mode: All tool calls are logged but never blocked.");
-    console.log("     Review events with: sentinelflow intercept tail");
-    console.log("     Switch to enforce:  sentinelflow intercept install --mode enforce");
+    console.log("  Monitor mode: All tool calls are logged but never blocked.");
+    console.log("     Review events with: sentinelflow events tail");
   } else {
-    console.log("  🛡️  Enforce mode: Tool calls violating policy will be BLOCKED.");
-    console.log("     Make sure your allowlist/blocklist is correct before using.");
+    console.log("  Enforce mode: Tool calls violating policy will be BLOCKED.");
   }
 
   console.log("");
 }
 
+// ─── Uninstall Command ──────────────────────────────────────────────
+
 export async function interceptUninstallCommand(
-  targetPath: string
+  targetPath: string,
+  options?: { framework?: string }
 ): Promise<void> {
   const projectDir = path.resolve(targetPath);
+  const existing = isInstalled(projectDir);
 
-  if (!ClaudeCodeInterceptor.isInstalled(projectDir)) {
-    console.log("\n  ℹ️  No SentinelFlow hooks found in this project.\n");
+  if (!existing.installed) {
+    console.log("\n  No SentinelFlow hooks found in this project.\n");
     return;
   }
 
-  await ClaudeCodeInterceptor.uninstall(projectDir);
+  const framework = options?.framework
+    ? resolveFramework(projectDir, options.framework)
+    : existing.framework!;
+
+  if (framework === "claude-code") {
+    await ClaudeCodeInterceptor.uninstall(projectDir);
+  } else {
+    CursorInterceptor.uninstall(projectDir);
+  }
 
   console.log("");
-  console.log("  ✓ SentinelFlow hooks removed.");
+  console.log(`  SentinelFlow ${framework} hooks removed.`);
   console.log("    Event log preserved at .sentinelflow/events.jsonl");
-  console.log("    Event database preserved at .sentinelflow/events.db");
   console.log("");
 }
+
+// ─── Status Command ─────────────────────────────────────────────────
 
 export async function interceptStatusCommand(
   targetPath: string
 ): Promise<void> {
   const projectDir = path.resolve(targetPath);
 
-  const installed = ClaudeCodeInterceptor.isInstalled(projectDir);
+  const ccInstalled = ClaudeCodeInterceptor.isInstalled(projectDir);
+  const cursorInstalled = CursorInterceptor.isInstalled(projectDir);
   const eventLogPath = path.join(projectDir, ".sentinelflow", "events.jsonl");
   const hasEventLog = fs.existsSync(eventLogPath);
 
   console.log("");
   console.log("  SentinelFlow Runtime Status");
-  console.log("  ──────────────────────────");
+  console.log("  --------------------------");
   console.log("");
-  console.log(`  Project:       ${projectDir}`);
-  console.log(`  Hooks:         ${installed ? "✓ Installed" : "✗ Not installed"}`);
-  console.log(`  Event log:     ${hasEventLog ? "✓ Present" : "✗ No events yet"}`);
+  console.log(`  Project:          ${projectDir}`);
+  console.log(`  Claude Code:      ${ccInstalled ? "installed" : "not installed"}`);
+  console.log(`  Cursor:           ${cursorInstalled ? "installed" : "not installed"}`);
+  console.log(`  Event log:        ${hasEventLog ? "present" : "no events yet"}`);
 
   if (hasEventLog) {
-    const stats = fs.statSync(eventLogPath);
-    const lineCount = fs
-      .readFileSync(eventLogPath, "utf-8")
-      .split("\n")
-      .filter(Boolean).length;
-    const sizeKb = (stats.size / 1024).toFixed(1);
-    console.log(`  Events:        ${lineCount} events (${sizeKb} KB)`);
+    try {
+      const stats = fs.statSync(eventLogPath);
+      const lines = fs.readFileSync(eventLogPath, "utf-8").trim().split("\n").filter(Boolean);
+      const sizeKb = (stats.size / 1024).toFixed(1);
+      console.log(`  Events:           ${lines.length} events (${sizeKb} KB)`);
 
-    // Parse last event for timestamp
-    const lines = fs
-      .readFileSync(eventLogPath, "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    if (lines.length > 0) {
-      try {
-        const lastLine = lines[lines.length - 1];
-        const lastEvent = JSON.parse(lastLine!);
-        console.log(`  Last event:    ${lastEvent.timestamp}`);
-        console.log(`  Last type:     ${lastEvent.type}`);
-      } catch {
-        // Skip if can't parse
+      // Count by framework
+      let ccEvents = 0;
+      let cursorEvents = 0;
+      let blocked = 0;
+      for (const line of lines) {
+        try {
+          const e = JSON.parse(line);
+          if (e.framework === "claude_code") ccEvents++;
+          if (e.framework === "cursor") cursorEvents++;
+          if (e.outcome === "blocked") blocked++;
+        } catch { continue; }
       }
-    }
-
-    // Count blocked events
-    let blocked = 0;
-    let errors = 0;
-    for (const line of lines) {
-      try {
-        const event = JSON.parse(line);
-        if (event.type === "tool_call_blocked") blocked++;
-        if (event.tool?.status === "error") errors++;
-      } catch {
-        continue;
-      }
-    }
-    if (blocked > 0) {
-      console.log(`  Blocked calls: ${blocked}`);
-    }
-    if (errors > 0) {
-      console.log(`  Tool errors:   ${errors}`);
-    }
+      if (ccEvents > 0) console.log(`  Claude Code:      ${ccEvents} events`);
+      if (cursorEvents > 0) console.log(`  Cursor:           ${cursorEvents} events`);
+      if (blocked > 0) console.log(`  Blocked calls:    ${blocked}`);
+    } catch { /* skip */ }
   }
 
   console.log("");
 }
+
+// ─── Tail Command ───────────────────────────────────────────────────
 
 export async function interceptTailCommand(
   targetPath: string,
@@ -207,67 +305,40 @@ export async function interceptTailCommand(
   }
 
   const numLines = parseInt(options.lines ?? "20", 10);
-  const lines = fs
-    .readFileSync(eventLogPath, "utf-8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .slice(-numLines);
+  const lines = fs.readFileSync(eventLogPath, "utf-8").trim().split("\n").filter(Boolean).slice(-numLines);
 
   console.log("");
   console.log(`  SentinelFlow Event Log (last ${lines.length} events)`);
-  console.log("  ─────────────────────────────────────────────");
+  console.log("  " + "-".repeat(50));
   console.log("");
 
   for (const line of lines) {
     try {
       const event = JSON.parse(line);
       const time = new Date(event.timestamp).toLocaleTimeString();
-      const type = event.type;
+      const fw = (event.framework === "cursor") ? "[cursor]" : "[claude]";
+      const type = event.event_type || event.type || "unknown";
+      const outcome = event.outcome || "";
+      const tool = event.tool_name || event.tool?.name || "";
+      const reason = event.reason || event.governance?.reason || "";
 
-      let icon = "📝";
-      switch (type) {
-        case "session_start":
-          icon = "🟢";
-          break;
-        case "session_end":
-          icon = "🔴";
-          break;
-        case "tool_call_start":
-          icon = "🔧";
-          break;
-        case "tool_call_end":
-          icon = event.tool?.status === "error" ? "❌" : "✅";
-          break;
-        case "tool_call_blocked":
-          icon = "🚫";
-          break;
-      }
+      let marker = "  ";
+      if (outcome === "blocked") marker = "XX";
+      else if (outcome === "error") marker = "ER";
+      else if (outcome === "allowed") marker = "OK";
+      else marker = "..";
 
-      let detail = "";
-      if (event.tool?.name) {
-        detail = ` ${event.tool.name}`;
-        if (event.tool.input_summary) {
-          detail += ` → ${event.tool.input_summary.slice(0, 60)}`;
-        }
-      }
-      if (event.governance?.reason) {
-        detail += ` (${event.governance.reason.slice(0, 60)})`;
-      }
+      const detail = tool ? ` ${tool}` : "";
+      const reasonStr = reason ? ` — ${reason.slice(0, 50)}` : "";
 
-      console.log(`  ${time} ${icon} ${type}${detail}`);
-    } catch {
-      continue;
-    }
+      console.log(`  ${time} ${marker} ${fw} ${type}${detail}${reasonStr}`);
+    } catch { continue; }
   }
 
   console.log("");
 
   if (options.follow) {
-    console.log("  Watching for new events... (Ctrl+C to stop)");
-    console.log("");
-
-    // Simple follow mode: poll the file every second
+    console.log("  Watching for new events... (Ctrl+C to stop)\n");
     let lastSize = fs.statSync(eventLogPath).size;
     const interval = setInterval(() => {
       try {
@@ -275,32 +346,25 @@ export async function interceptTailCommand(
         if (currentSize > lastSize) {
           const content = fs.readFileSync(eventLogPath, "utf-8");
           const allLines = content.trim().split("\n").filter(Boolean);
-          // Show new lines only
           const newLines = allLines.slice(-Math.max(1, allLines.length - lines.length));
           for (const newLine of newLines) {
             try {
               const event = JSON.parse(newLine);
               const time = new Date(event.timestamp).toLocaleTimeString();
-              console.log(`  ${time} ${event.type} ${event.tool?.name ?? ""}`);
-            } catch {
-              // skip
-            }
+              const fw = event.framework === "cursor" ? "[cursor]" : "[claude]";
+              console.log(`  ${time} ${fw} ${event.event_type || event.type} ${event.tool_name || ""}`);
+            } catch { /* skip */ }
           }
           lastSize = currentSize;
         }
-      } catch {
-        clearInterval(interval);
-      }
+      } catch { clearInterval(interval); }
     }, 1000);
 
-    // Keep process alive
     process.on("SIGINT", () => {
       clearInterval(interval);
       console.log("\n  Stopped.\n");
       process.exit(0);
     });
-
-    // Block indefinitely
     await new Promise(() => {});
   }
 }
