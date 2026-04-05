@@ -59,6 +59,7 @@ import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
+import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
   InterceptorConfig,
   PolicyProvider,
@@ -288,6 +289,8 @@ export class CopilotInterceptor extends BaseInterceptor {
    * Also: timestamp is a number (epoch ms) not ISO string.
    */
   private generateHandlerScript(): string {
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+
     return `#!/usr/bin/env node
 /**
  * SentinelFlow GitHub Copilot Hook Handler
@@ -395,25 +398,8 @@ function makeEvent(type, outcome, severity, opts = {}) {
   };
 }
 
-// ─── Dangerous Command Detection ────────────────────────────
-const DANGEROUS_PATTERNS = [
-  { pattern: /rm\\s+-rf\\s+\\/(?!tmp)/, label: "rm -rf outside /tmp" },
-  { pattern: /curl\\s+.*\\|\\s*(bash|sh|zsh)/, label: "curl piped to shell" },
-  { pattern: /wget\\s+.*\\|\\s*(bash|sh|zsh)/, label: "wget piped to shell" },
-  { pattern: /chmod\\s+777/, label: "chmod 777" },
-  { pattern: />(\\s*)\\/etc\\//, label: "write to /etc" },
-  { pattern: /\\bdd\\b.*\\bof=\\/dev\\//, label: "dd to block device" },
-  { pattern: /mkfs\\./, label: "filesystem format" },
-  { pattern: /\\bnpm\\s+publish\\b/, label: "npm publish" },
-  { pattern: /\\bgit\\s+push\\b.*--force/, label: "force push" },
-];
-
-function checkDangerousCommand(cmd) {
-  for (const { pattern, label } of DANGEROUS_PATTERNS) {
-    if (pattern.test(cmd)) return { dangerous: true, label, command: cmd };
-  }
-  return { dangerous: false };
-}
+// --- Enterprise Policy Evaluation (from central registry) ---
+${policyCode}
 
 /**
  * Parse toolArgs — Copilot sends this as a JSON STRING, not an object.
@@ -488,37 +474,22 @@ function summarizeToolArgs(toolName, parsedArgs) {
       const parsedArgs = parseToolArgs(input.toolArgs);
       const inputSummary = summarizeToolArgs(toolName, parsedArgs);
 
-      // Tool blocklist check
-      if (ENFORCEMENT_MODE === "enforce" && TOOL_BLOCKLIST.has(toolName)) {
-        const reason = 'Tool "' + toolName + '" is in the blocklist';
-        persistEvent(makeEvent("tool_call_blocked", "blocked", "medium",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-            action: inputSummary, policy_id: "tool_blocklist", reason,
-            payload: { hook: "preToolUse", cwd: input.cwd } }));
-        process.stderr.write("SentinelFlow: " + reason + "\\n");
-        process.exit(2); // EXIT 2 = BLOCK (same as Claude Code)
-      }
+      const policy = evaluatePolicy(toolName, parsedArgs);
+      const isBlock = policy.block;
 
-      // Dangerous command check (for bash/shell tools)
-      if (ENFORCEMENT_MODE === "enforce" &&
-          (toolName === "bash" || toolName === "shell" || toolName === "terminal")) {
-        const cmd = parsedArgs.command || parsedArgs.raw || "";
-        const check = checkDangerousCommand(cmd);
-        if (check.dangerous) {
-          const reason = "Dangerous command: " + check.label + " \\u2014 " + cmd.slice(0, 100);
-          persistEvent(makeEvent("tool_call_blocked", "blocked", "high",
-            { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-              action: inputSummary, policy_id: "dangerous_commands", reason,
-              payload: { hook: "preToolUse", cwd: input.cwd } }));
-          process.stderr.write("SentinelFlow: " + reason + "\\n");
-          process.exit(2); // EXIT 2 = BLOCK
-        }
-      }
-
-      // Allowed
-      persistEvent(makeEvent("tool_call_attempted", "allowed", "info",
+      persistEvent(makeEvent(
+        isBlock ? "tool_call_blocked" : "tool_call_attempted",
+        isBlock ? "blocked" : "allowed",
+        isBlock ? "high" : "info",
         { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-          action: inputSummary, payload: { hook: "preToolUse", cwd: input.cwd } }));
+          action: inputSummary, policy_id: policy.id, reason: policy.reason,
+          payload: { hook: "preToolUse", cwd: input.cwd } }
+      ));
+
+      if (isBlock) {
+        process.stderr.write("SentinelFlow: " + (policy.reason || "Blocked by policy") + "\\n");
+        process.exit(2);
+      }
       process.exit(0);
     }
 

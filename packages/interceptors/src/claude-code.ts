@@ -47,6 +47,7 @@ import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
+import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
   InterceptorConfig,
   PolicyProvider,
@@ -499,6 +500,9 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
    * SQLite (structured queries). SQLite failure never blocks the workflow.
    */
   private generateHandlerScript(): string {
+    // Generate enterprise policy evaluation code from central registry
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+
     return `#!/usr/bin/env node
 /**
  * SentinelFlow Claude Code Hook Handler
@@ -627,60 +631,10 @@ function makeEvent(type, outcome, severity, opts = {}) {
   };
 }
 
-// ─── Policy Evaluation ──────────────────────────────────────
-function evaluatePolicy(toolName, toolInput) {
-  if (TOOL_BLOCKLIST.has(toolName))
-    return { block: true, reason: 'Tool "' + toolName + '" is in the blocklist', id: "tool_blocklist" };
-  if (TOOL_ALLOWLIST.has(toolName))
-    return { block: false };
+// --- Enterprise Policy Evaluation (from central registry) ---
+${policyCode}
 
-  // Load runtime policies from .sentinelflow-policy.yaml if present
-  const policyPath = path.join(PROJECT_DIR, ".sentinelflow-policy.yaml");
-  if (fs.existsSync(policyPath)) {
-    try {
-      const content = fs.readFileSync(policyPath, "utf-8");
-      const rtMatch = content.match(/runtime_policies:([\\s\\S]*?)(?=\\n[a-z]|$)/);
-      if (rtMatch) {
-        const block = rtMatch[1];
-        const blockedMatch = block.match(/blocked_tools:\\s*\\n((?:\\s+-\\s+.+\\n?)*)/);
-        if (blockedMatch) {
-          const blocked = blockedMatch[1].split("\\n").map(l => l.trim().replace(/^-\\s+/, "")).filter(Boolean);
-          if (blocked.includes(toolName))
-            return { block: true, reason: 'Tool "' + toolName + '" blocked by policy file', id: "policy_yaml" };
-        }
-      }
-    } catch { /* ignore policy parse errors */ }
-  }
-
-  // Dangerous command patterns (Bash tool only)
-  if (toolName === "Bash" && toolInput && typeof toolInput.command === "string") {
-    const cmd = toolInput.command;
-    const patterns = [
-      [/rm\\s+-rf\\s+\\/(?!tmp)/, "rm -rf outside /tmp"],
-      [/curl.*\\|\\s*(?:bash|sh)/, "curl piped to shell"],
-      [/wget.*\\|\\s*(?:bash|sh)/, "wget piped to shell"],
-      [/chmod\\s+777/, "world-writable permissions"],
-      [/>(\\s*)\\/etc\\//, "writing to /etc"],
-      [/dd\\s+if=.*of=\\/dev\\//, "dd to block device"],
-      [/mkfs\\./, "filesystem format"],
-      [/npm\\s+publish/, "npm publish"],
-      [/git\\s+push.*--force/, "force push"],
-    ];
-    for (const [re, desc] of patterns) {
-      if (re.test(cmd)) {
-        return {
-          block: ENFORCEMENT_MODE === "enforce",
-          reason: "Dangerous command: " + desc + " — " + cmd.slice(0, 100),
-          id: "dangerous_commands",
-        };
-      }
-    }
-  }
-
-  return { block: false };
-}
-
-// ─── Main ───────────────────────────────────────────────────
+// --- Main ───────────────────────────────────────────────────
 async function main() {
   // Read all of stdin
   let rawInput = "";
