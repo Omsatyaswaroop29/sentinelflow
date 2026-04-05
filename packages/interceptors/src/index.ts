@@ -7,22 +7,14 @@
  * AI agents and their tools, evaluating every tool call against governance
  * policies before allowing execution.
  *
- * Quick start (Claude Code):
- *
- *   import { ClaudeCodeInterceptor, DangerousCommandPolicy, ConsoleListener } from "@sentinelflow/interceptors";
- *
- *   const interceptor = await ClaudeCodeInterceptor.install({
- *     projectDir: "./my-project",
- *     enforcement_mode: "monitor",  // Start with monitor, graduate to enforce
- *     policies: [new DangerousCommandPolicy()],
- *     listeners: [new ConsoleListener({ verbose: true })],
- *   });
- *
- *   // Later, when done:
- *   await interceptor.stop();
+ * Supported frameworks:
+ *   - Claude Code (.claude/settings.local.json)
+ *   - Cursor (.cursor/hooks.json)
+ *   - GitHub Copilot (.github/hooks/*.json)
+ *   - Codex CLI (.codex/hooks.json)
  */
 
-// ─── Core Interfaces ────────────────────────────────────────────────
+// --- Core Interfaces ---
 export type {
   Interceptor,
   InterceptorConfig,
@@ -33,10 +25,10 @@ export type {
   PolicyEvaluationResult,
 } from "./interface";
 
-// ─── Base Class ─────────────────────────────────────────────────────
+// --- Base Class ---
 export { BaseInterceptor } from "./base";
 
-// ─── Framework Interceptors ─────────────────────────────────────────
+// --- Framework Interceptors ---
 export {
   ClaudeCodeInterceptor,
   type ClaudeCodeInterceptorConfig,
@@ -71,16 +63,46 @@ export {
   type CodexInterceptorConfig,
 } from "./codex";
 
-// ─── Built-in Policies ──────────────────────────────────────────────
+// --- Built-in Policies (8 enterprise-grade policies) ---
 export {
   ToolAllowlistPolicy,
   ToolBlocklistPolicy,
   DangerousCommandPolicy,
   CostBudgetPolicy,
   DataBoundaryPolicy,
+  NetworkEgressPolicy,
+  SecretsLeakPolicy,
+  FileWritePolicy,
 } from "./policies";
 
-// ─── Built-in Listeners ─────────────────────────────────────────────
+// --- Central Pattern Registry ---
+export {
+  DANGEROUS_COMMAND_PATTERNS,
+  SECRET_PATTERNS,
+  SENSITIVE_WRITE_PATHS,
+  NETWORK_EGRESS_PATTERNS,
+  SHELL_TOOL_NAMES,
+  compilePatterns,
+  patternsToHandlerJSON,
+  secretPatternsToHandlerJSON,
+  sensitivePathsToHandlerJSON,
+  networkPatternsToHandlerJSON,
+  type DangerousPattern,
+  type SecretPattern,
+  type SensitivePathPattern,
+  type NetworkEgressPattern,
+} from "./patterns";
+
+// --- Command Normalizer ---
+export {
+  normalizeCommand,
+  normalizeAndSplit,
+  splitCompoundCommand,
+  extractDomain,
+  normalizerToHandlerJS,
+} from "./normalizer";
+
+// --- Built-in Listeners ---
 export {
   ConsoleListener,
   JsonlFileListener,
@@ -91,7 +113,7 @@ export {
   type AlertPayload,
 } from "./listeners";
 
-// ─── Anomaly Detection ───────────────────────────────────────────
+// --- Anomaly Detection ---
 export {
   type AnomalyDetector,
   NovelToolDetector,
