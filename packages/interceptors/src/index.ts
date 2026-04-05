@@ -141,3 +141,24 @@ export {
   type ClassificationRule,
   type AgentClearance,
 } from "./data-boundary";
+
+// --- Identity and Delegation Governance ---
+export {
+  IdentityResolver,
+  RoleBasedAccessPolicy,
+  EnvironmentPolicy,
+  type IdentityConfig,
+} from "./identity";
+
+// --- Compliance Mappings ---
+export {
+  RUNTIME_COMPLIANCE_MAPPINGS,
+  getControlsForOwaspRisk,
+  getControlsForEuArticle,
+  getEvidenceSnippet,
+  generateComplianceSummary,
+  type ComplianceMapping,
+  type OwaspLlmMapping,
+  type EuAiActMapping,
+  type NistMapping,
+} from "./compliance";

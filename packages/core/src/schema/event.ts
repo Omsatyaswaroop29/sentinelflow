@@ -60,6 +60,51 @@ export interface AnomalyResult {
   description?: string;
 }
 
+// ─── Identity Context (Priority 9) ─────────────────────────────────
+
+export type Environment = "development" | "staging" | "production" | "ci" | "unknown";
+
+export type AgentRole =
+  | "reader"        // Can only read files and data
+  | "writer"        // Can read and write source code
+  | "executor"      // Can run commands (bash, shell)
+  | "deployer"      // Can publish, deploy, push
+  | "admin"         // Full access
+  | "custom";       // Custom role defined in policy
+
+/**
+ * Identity context — links agent actions back to human sponsors.
+ *
+ * This is what compliance auditors ask for: "Who authorized this agent
+ * to run? What team owns it? Is this production or development?"
+ *
+ * Populated from:
+ *   - .sentinelflow-policy.yaml (static config)
+ *   - Environment variables (SENTINELFLOW_OWNER, SENTINELFLOW_TEAM, etc.)
+ *   - Git config (user.name, user.email as fallback)
+ *   - CI/CD context (GITHUB_ACTOR, CI_PIPELINE_SOURCE, etc.)
+ */
+export interface IdentityContext {
+  /** Human who authorized this agent session. Required for audit. */
+  human_owner?: string;
+  /** Email of the human owner (for alerting and audit trails) */
+  human_email?: string;
+  /** Team that owns this agent/project */
+  team?: string;
+  /** Deployment environment */
+  environment: Environment;
+  /** Agent's assigned role — determines what tools it can access */
+  role: AgentRole;
+  /** Privilege level 1-10 (1 = lowest, 10 = admin) */
+  privilege_level: number;
+  /** Whether this agent is in an external-facing workflow */
+  external_facing?: boolean;
+  /** Custom tags for organization-specific categorization */
+  tags?: string[];
+}
+
+// ─── Main Event Type ────────────────────────────────────────────────
+
 export interface AgentEvent {
   id: string;
   timestamp: string;
@@ -71,4 +116,6 @@ export interface AgentEvent {
   governance?: GovernanceEvaluation;
   anomaly?: AnomalyResult;
   metadata?: Record<string, unknown>;
+  /** Identity context — who authorized this agent and what role it has */
+  identity?: IdentityContext;
 }
