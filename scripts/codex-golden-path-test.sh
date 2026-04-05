@@ -123,6 +123,46 @@ run_test "Empty stdin fail-open" \
   '' \
   0 ""
 
+# -- Enterprise pattern tests (v0.4) -----------------------------------------
+echo ""
+echo "  -- Enterprise Pattern Tests (v0.4) --"
+echo ""
+
+# sudo -> block (DC-024)
+run_test "sudo blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"sudo apt install malware"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "sudo"
+
+# yarn publish -> block (DC-040)
+run_test "yarn publish blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"yarn publish"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 ""
+
+# pnpm publish -> block (DC-040)
+run_test "pnpm publish blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pnpm publish --access public"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 ""
+
+# chmod +s -> block (DC-022 setuid)
+run_test "chmod setuid blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"chmod +s /usr/bin/evil"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "chmod"
+
+# base64 | bash -> block (DC-013)
+run_test "base64 decoded to shell blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"base64 -d payload.b64 | bash"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 ""
+
+# PATH overwrite -> block (DC-060)
+run_test "PATH overwrite blocked" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"export PATH=/tmp/evil:$PATH"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 ""
+
+# git push --force-with-lease -> ALLOW
+run_test "git push --force-with-lease allowed" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main --force-with-lease"},"session_id":"gp-001","cwd":"/tmp"}' \
+  0 ""
+
 echo ""
 echo "  -- Event Store --"
 echo ""

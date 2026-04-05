@@ -60,14 +60,10 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { v4 as uuidv4 } from "uuid";
-import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
+import type { AgentEvent } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
-import type {
-  InterceptorConfig,
-  PolicyProvider,
-  EventListener,
-} from "./interface";
+import { generatePolicyEvaluationCode } from "./handler-codegen";
+import type { InterceptorConfig } from "./interface";
 
 // ─── Cursor Hook Event Types ────────────────────────────────────────
 
@@ -368,8 +364,22 @@ export class CursorInterceptor extends BaseInterceptor {
    *   - Cursor uses conversation_id (not session_id) for correlation
    *   - Always output valid JSON to stdout for blocking hooks
    *   - Fail-open means: output `{ "permission": "allow" }` on any error
+   *
+   * MIGRATION NOTE (v0.4):
+   *   Now uses the shared enterprise policy engine via generatePolicyEvaluationCode(),
+   *   giving Cursor parity with Claude Code / Copilot / Codex:
+   *     - 18 dangerous-command patterns (was 9)
+   *     - 15 secrets detection patterns (was 0)
+   *     - 12 sensitive file-write path patterns (was 0)
+   *     - Command normalization via _sfSummarize
    */
   private generateHandlerScript(): string {
+    // Generate enterprise policy evaluation code from central registry.
+    // Defines _sfSummarize() and evaluatePolicy(toolName, toolInput) in the
+    // generated script. All patterns compile from JSON via new RegExp(),
+    // which avoids the template-literal double-escape problem.
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+
     return `#!/usr/bin/env node
 /**
  * SentinelFlow Cursor Hook Handler
@@ -396,9 +406,6 @@ const path = require("path");
 const crypto = require("crypto");
 
 // ─── Configuration (baked in at install time) ───────────────
-// Resolve project dir: hooks.json is at .cursor/hooks.json,
-// handler is at .sentinelflow/cursor-handler.js.
-// __dirname gives us .sentinelflow/, so project root is one level up.
 const PROJECT_DIR = ${JSON.stringify(this._projectDir)};
 const SF_DIR = path.join(PROJECT_DIR, ".sentinelflow");
 const EVENT_LOG = path.join(SF_DIR, "events.jsonl");
@@ -454,15 +461,6 @@ try {
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-function summarizeInput(input) {
-  if (!input) return null;
-  if (typeof input === "string") return input.slice(0, MAX_INPUT_LENGTH);
-  if (typeof input.command === "string") return input.command.slice(0, MAX_INPUT_LENGTH);
-  if (typeof input.file_path === "string") return "file: " + input.file_path;
-  const raw = JSON.stringify(input);
-  return raw.length > MAX_INPUT_LENGTH ? raw.slice(0, MAX_INPUT_LENGTH) + "..." : raw;
-}
-
 function persistEvent(ev) {
   try {
     if (!fs.existsSync(SF_DIR)) fs.mkdirSync(SF_DIR, { recursive: true });
@@ -487,7 +485,8 @@ function persistEvent(ev) {
   }
 }
 
-function makeEvent(type, outcome, severity, opts = {}) {
+function makeEvent(type, outcome, severity, opts) {
+  opts = opts || {};
   return {
     event_id: crypto.randomUUID(),
     schema_version: 1,
@@ -496,7 +495,8 @@ function makeEvent(type, outcome, severity, opts = {}) {
     framework: "cursor",
     session_id: opts.session_id || "unknown",
     event_type: type,
-    outcome, severity,
+    outcome: outcome,
+    severity: severity,
     tool_name: opts.tool_name || null,
     tool_input_summary: opts.tool_input_summary || null,
     action: opts.action || null,
@@ -506,37 +506,20 @@ function makeEvent(type, outcome, severity, opts = {}) {
   };
 }
 
-// ─── Dangerous Command Detection ────────────────────────────
-// Same patterns as Claude Code handler — consistency across frameworks
-const DANGEROUS_PATTERNS = [
-  { pattern: /rm\\s+-rf\\s+\\/(?!tmp)/, label: "rm -rf outside /tmp" },
-  { pattern: /curl\\s+.*\\|\\s*(bash|sh|zsh)/, label: "curl piped to shell" },
-  { pattern: /wget\\s+.*\\|\\s*(bash|sh|zsh)/, label: "wget piped to shell" },
-  { pattern: /chmod\\s+777/, label: "chmod 777" },
-  { pattern: />(\\s*)\\/etc\\//, label: "write to /etc" },
-  { pattern: /\\bdd\\b.*\\bof=\\/dev\\//, label: "dd to block device" },
-  { pattern: /mkfs\\./, label: "filesystem format" },
-  { pattern: /\\bnpm\\s+publish\\b/, label: "npm publish" },
-  { pattern: /\\bgit\\s+push\\b.*--force/, label: "force push" },
-];
-
-function checkDangerousCommand(cmd) {
-  for (const { pattern, label } of DANGEROUS_PATTERNS) {
-    if (pattern.test(cmd)) {
-      return { dangerous: true, label, command: cmd };
-    }
-  }
-  return { dangerous: false };
-}
+// --- Enterprise Policy Evaluation (from central registry) ---
+// 18 dangerous-command patterns, 15 secrets patterns, 12 sensitive write paths.
+// Identical to what Claude Code / Copilot / Codex handlers use.
+// Defines: _sfSummarize(input), evaluatePolicy(toolName, toolInput)
+// evaluatePolicy returns { block: bool, reason: string|null, id: string|null }
+${policyCode}
 
 function checkReadFileBlocked(filePath) {
-  for (const pattern of READ_FILE_BLOCK_PATTERNS) {
+  for (var i = 0; i < READ_FILE_BLOCK_PATTERNS.length; i++) {
+    var pattern = READ_FILE_BLOCK_PATTERNS[i];
     if (pattern.startsWith("*.")) {
-      // Extension match: *.pem, *.key
       if (filePath.endsWith(pattern.slice(1))) return true;
     } else {
-      // Exact filename match: .env, .npmrc
-      const basename = filePath.split("/").pop() || "";
+      var basename = filePath.split("/").pop() || "";
       if (basename === pattern) return true;
     }
   }
@@ -549,9 +532,9 @@ function allowResponse() {
 }
 
 function denyResponse(userMsg, agentMsg) {
-  const permission = ESCALATION_MODE === "ask" ? "ask" : "deny";
+  var permission = ESCALATION_MODE === "ask" ? "ask" : "deny";
   return JSON.stringify({
-    permission,
+    permission: permission,
     userMessage: userMsg,
     agentMessage: agentMsg || userMsg,
   });
@@ -559,17 +542,16 @@ function denyResponse(userMsg, agentMsg) {
 
 // ─── Main Handler ───────────────────────────────────────────
 (async () => {
-  let raw = "";
+  var raw = "";
   try {
-    raw = await new Promise((resolve, reject) => {
-      const chunks = [];
-      process.stdin.on("data", (c) => chunks.push(c));
-      process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    raw = await new Promise(function(resolve, reject) {
+      var chunks = [];
+      process.stdin.on("data", function(c) { chunks.push(c); });
+      process.stdin.on("end", function() { resolve(Buffer.concat(chunks).toString("utf-8")); });
       process.stdin.on("error", reject);
-      setTimeout(() => resolve(Buffer.concat(chunks).toString("utf-8")), 5000);
+      setTimeout(function() { resolve(Buffer.concat(chunks).toString("utf-8")); }, 5000);
     });
-  } catch {
-    // Can't read stdin — fail open
+  } catch (e) {
     process.stdout.write(allowResponse());
     process.exit(0);
   }
@@ -579,7 +561,7 @@ function denyResponse(userMsg, agentMsg) {
     process.exit(0);
   }
 
-  let input;
+  var input;
   try {
     input = JSON.parse(raw);
   } catch (e) {
@@ -588,34 +570,33 @@ function denyResponse(userMsg, agentMsg) {
     process.exit(0);
   }
 
-  const hookEvent = input.hook_event_name || "unknown";
-  const sessionId = input.conversation_id || "unknown";
+  var hookEvent = input.hook_event_name || "unknown";
+  var sessionId = input.conversation_id || "unknown";
 
   try {
     switch (hookEvent) {
 
     // ─── beforeShellExecution (CAN BLOCK) ───────────────
+    // Uses enterprise evaluatePolicy() — 18 dangerous-command patterns,
+    // secrets detection, and path-write governance from central registry.
     case "beforeShellExecution": {
-      const cmd = input.command || "";
-      const inputSummary = cmd.slice(0, MAX_INPUT_LENGTH);
+      var cmd = input.command || "";
+      var inputSummary = cmd.slice(0, MAX_INPUT_LENGTH);
 
-      // Check dangerous command patterns
-      if (ENFORCEMENT_MODE === "enforce") {
-        const check = checkDangerousCommand(cmd);
-        if (check.dangerous) {
-          const reason = "Dangerous command: " + check.label + " \\u2014 " + cmd.slice(0, 100);
-          persistEvent(makeEvent(
-            "tool_call_blocked", "blocked", "high",
-            { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
-              action: inputSummary, policy_id: "dangerous_commands", reason,
-              payload: { hook: "beforeShellExecution", cwd: input.cwd, workspace_roots: input.workspace_roots } }
-          ));
-          process.stdout.write(denyResponse(
-            "SentinelFlow: " + reason,
-            "This command was blocked by a SentinelFlow governance policy. " + reason + ". Try a safer alternative."
-          ));
-          process.exit(0);
-        }
+      var policy = evaluatePolicy("Bash", { command: cmd });
+      if (policy.block) {
+        var reason = policy.reason || "Blocked by policy";
+        persistEvent(makeEvent(
+          "tool_call_blocked", "blocked", "high",
+          { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
+            action: inputSummary, policy_id: policy.id || "dangerous_commands", reason: reason,
+            payload: { hook: "beforeShellExecution", cwd: input.cwd, workspace_roots: input.workspace_roots } }
+        ));
+        process.stdout.write(denyResponse(
+          "SentinelFlow: " + reason,
+          "This command was blocked by a SentinelFlow governance policy. " + reason + ". Try a safer alternative."
+        ));
+        process.exit(0);
       }
 
       // Allowed — log and proceed
@@ -630,41 +611,45 @@ function denyResponse(userMsg, agentMsg) {
     }
 
     // ─── beforeMCPExecution (CAN BLOCK) ─────────────────
+    // Cursor-specific MCP_SERVER_BLOCKLIST check runs first (server-level block).
+    // Then enterprise evaluatePolicy() handles tool blocklist + command patterns.
     case "beforeMCPExecution": {
-      const toolName = input.tool_name || "unknown-mcp-tool";
-      const serverName = input.server || input.command || "unknown-server";
-      let toolInput = null;
-      try { toolInput = JSON.parse(input.tool_input || "{}"); } catch { toolInput = input.tool_input; }
-      const inputSummary = summarizeInput(toolInput) || toolName;
+      var toolName = input.tool_name || "unknown-mcp-tool";
+      var serverName = input.server || input.command || "unknown-server";
+      var toolInput = null;
+      try { toolInput = JSON.parse(input.tool_input || "{}"); } catch(e) { toolInput = input.tool_input; }
+      var inputSummary2 = _sfSummarize(toolInput) || toolName;
 
-      // Check MCP server blocklist
-      if (ENFORCEMENT_MODE === "enforce" && MCP_SERVER_BLOCKLIST.has(serverName)) {
-        const reason = 'MCP server "' + serverName + '" is in the blocklist';
+      // Cursor-specific: block by MCP server name.
+      // evaluatePolicy() doesn't know about server-level blocklists.
+      if (MCP_SERVER_BLOCKLIST.has(serverName)) {
+        var mcpReason = 'MCP server "' + serverName + '" is in the blocklist';
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-            action: inputSummary, policy_id: "mcp_server_blocklist", reason,
+          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary2,
+            action: inputSummary2, policy_id: "mcp_server_blocklist", reason: mcpReason,
             payload: { hook: "beforeMCPExecution", server: serverName } }
         ));
         process.stdout.write(denyResponse(
-          "SentinelFlow: " + reason,
-          "This MCP tool call was blocked by governance policy. " + reason
+          "SentinelFlow: " + mcpReason,
+          "This MCP tool call was blocked by governance policy. " + mcpReason
         ));
         process.exit(0);
       }
 
-      // Check tool blocklist
-      if (ENFORCEMENT_MODE === "enforce" && TOOL_BLOCKLIST.has(toolName)) {
-        const reason = 'Tool "' + toolName + '" is in the blocklist';
+      // Enterprise policy: tool blocklist + dangerous patterns + secrets
+      var mcpPolicy = evaluatePolicy(toolName, toolInput);
+      if (mcpPolicy.block) {
+        var mcpPolicyReason = mcpPolicy.reason || "Blocked by policy";
         persistEvent(makeEvent(
-          "tool_call_blocked", "blocked", "medium",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-            action: inputSummary, policy_id: "tool_blocklist", reason,
+          "tool_call_blocked", "blocked", "high",
+          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary2,
+            action: inputSummary2, policy_id: mcpPolicy.id || "enterprise_policy", reason: mcpPolicyReason,
             payload: { hook: "beforeMCPExecution", server: serverName } }
         ));
         process.stdout.write(denyResponse(
-          "SentinelFlow: " + reason,
-          "This MCP tool call was blocked by governance policy. " + reason
+          "SentinelFlow: " + mcpPolicyReason,
+          "This MCP tool call was blocked by governance policy. " + mcpPolicyReason
         ));
         process.exit(0);
       }
@@ -672,8 +657,8 @@ function denyResponse(userMsg, agentMsg) {
       // Allowed
       persistEvent(makeEvent(
         "tool_call_attempted", "allowed", "info",
-        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-          action: inputSummary,
+        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary2,
+          action: inputSummary2,
           payload: { hook: "beforeMCPExecution", server: serverName } }
       ));
       process.stdout.write(allowResponse());
@@ -682,19 +667,19 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── beforeReadFile (CAN BLOCK) ─────────────────────
     case "beforeReadFile": {
-      const filePath = input.file_path || "unknown";
+      var filePath = input.file_path || "unknown";
 
       // Check file block patterns (.env, *.pem, *.key, etc.)
       if (ENFORCEMENT_MODE === "enforce" && checkReadFileBlocked(filePath)) {
-        const reason = 'Reading "' + filePath + '" is blocked by file access policy';
+        var fileReason = 'Reading "' + filePath + '" is blocked by file access policy';
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
           { session_id: sessionId, tool_name: "ReadFile", tool_input_summary: "file: " + filePath,
-            action: "file: " + filePath, policy_id: "read_file_policy", reason,
+            action: "file: " + filePath, policy_id: "read_file_policy", reason: fileReason,
             payload: { hook: "beforeReadFile", file_path: filePath } }
         ));
         process.stdout.write(denyResponse(
-          "SentinelFlow: " + reason,
+          "SentinelFlow: " + fileReason,
           "This file read was blocked by a SentinelFlow governance policy. The file matches a blocked pattern."
         ));
         process.exit(0);
@@ -713,13 +698,14 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── afterFileEdit (OBSERVE-ONLY) ───────────────────
     case "afterFileEdit": {
-      const filePath = input.file_path || "unknown";
-      const editCount = (input.edits || []).length;
+      var editFilePath = input.file_path || "unknown";
+      var editCount = (input.edits || []).length;
       persistEvent(makeEvent(
         "tool_call_completed", "allowed", "info",
-        { session_id: sessionId, tool_name: "FileEdit", tool_input_summary: "file: " + filePath,
-          action: filePath + " (" + editCount + " edit" + (editCount !== 1 ? "s" : "") + ")",
-          payload: { hook: "afterFileEdit", file_path: filePath, edit_count: editCount } }
+        { session_id: sessionId, tool_name: "FileEdit",
+          tool_input_summary: "file: " + editFilePath,
+          action: editFilePath + " (" + editCount + " edit" + (editCount !== 1 ? "s" : "") + ")",
+          payload: { hook: "afterFileEdit", file_path: editFilePath, edit_count: editCount } }
       ));
       // No stdout JSON — Cursor ignores it for afterFileEdit
       break;
@@ -727,11 +713,11 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── stop (OBSERVE-ONLY) ────────────────────────────
     case "stop": {
-      const status = input.status || "completed";
+      var stopStatus = input.status || "completed";
       persistEvent(makeEvent(
         "session_ended", "info", "info",
         { session_id: sessionId,
-          payload: { hook: "stop", status } }
+          payload: { hook: "stop", status: stopStatus } }
       ));
       // No stdout JSON — Cursor ignores it for stop
       break;
@@ -739,8 +725,8 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── beforeSubmitPrompt (OBSERVE-ONLY) ──────────────
     case "beforeSubmitPrompt": {
-      const prompt = (input.prompt || "").slice(0, 200);
-      const attachmentCount = (input.attachments || []).length;
+      var prompt = (input.prompt || "").slice(0, 200);
+      var attachmentCount = (input.attachments || []).length;
       persistEvent(makeEvent(
         "tool_call_attempted", "allowed", "info",
         { session_id: sessionId, tool_name: "PromptSubmit",

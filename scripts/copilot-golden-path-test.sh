@@ -67,7 +67,7 @@ run_test "Safe bash (npm test)" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"npm test\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
   0 ""
 
-# Test 2: rm -rf -> block (exit 2, same as Claude Code!)
+# Test 2: rm -rf -> block (exit 2)
 run_test "rm -rf outside /tmp" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"rm -rf /home/user/data\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
   2 "rm -rf"
@@ -122,10 +122,54 @@ run_test "Empty stdin -> fail-open" \
   '' \
   0 ""
 
-# Test 13: toolArgs as JSON string (Copilot-specific: must parse string)
+# Test 13: toolArgs JSON string parsing (Copilot-specific: toolArgs is a JSON STRING)
+# In bash single-quoted strings, \" is a literal backslash + double-quote, which
+# JSON interprets as an escaped double-quote inside the toolArgs string value.
 run_test "toolArgs JSON string parsing" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"rm -rf /etc/passwd\"}","hookEventName":"PreToolUse"}' \
   2 "rm -rf"
+
+# ── Enterprise pattern tests (v0.4) ─────────────────────────────────
+# Verify the 9 additional patterns not in the old array, confirming
+# Copilot now has full parity with Claude Code / Codex.
+echo ""
+echo "  -- Enterprise Pattern Tests (v0.4) --"
+echo ""
+
+# sudo -> block (DC-024)
+run_test "sudo blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"sudo apt install malware\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 "sudo"
+
+# yarn publish -> block (DC-040 covers npm/yarn/pnpm)
+run_test "yarn publish blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"yarn publish\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 ""
+
+# pnpm publish -> block (DC-040)
+run_test "pnpm publish blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"pnpm publish --access public\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 ""
+
+# chmod +s -> block (DC-022 setuid/setgid)
+run_test "chmod setuid blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"chmod +s /usr/bin/evil\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 "chmod"
+
+# base64 | bash -> block (DC-013 obfuscated execution)
+run_test "base64 decoded to shell blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"base64 -d payload.b64 | bash\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 ""
+
+# PATH overwrite -> block (DC-060 environment manipulation)
+run_test "PATH overwrite blocked" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"export PATH=/tmp/evil:$PATH\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  2 ""
+
+# git push --force-with-lease -> ALLOW (safe alternative, DC-030 regex exempts it)
+run_test "git push --force-with-lease allowed" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"git push origin main --force-with-lease\"}","hookEventName":"PreToolUse","sessionId":"gp-001"}' \
+  0 ""
 
 echo ""
 echo "  -- Event Store --"

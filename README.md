@@ -168,7 +168,15 @@ sentinelflow intercept uninstall .
 
 **How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot, `.sentinelflow/codex-handler.js` for Codex) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
 
-**Built-in policies:** 9 dangerous command patterns (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`, and more), tool allowlists/blocklists, MCP server blocklists (Cursor), and `.sentinelflow-policy.yaml` runtime rules.
+> **Phase 2 Beta — what's stable vs. in progress**
+>
+> Stable (used in production): hook installation/uninstall, policy evaluation engine (all 4 frameworks), JSONL event log, `intercept install/uninstall/status/test`, `events tail/blocked/stats`.
+>
+> Beta (functional but evolving): SQLite event store (requires `better-sqlite3` to be installed in the project), `costs` command (requires session rollups computed at stop), anomaly detection.
+>
+> Not yet implemented: dashboard UI, dynamic policy updates without reinstall, LangChain/CrewAI support.
+
+**Built-in policies:** 8 enterprise-grade policy classes covering 18 dangerous-command patterns (`rm -rf /`, `curl | bash`, `sudo`, `chmod +s`, `base64 | bash`, `PATH=...`, `yarn/pnpm publish`, `git push --force`, and more), 15 secrets-detection patterns (OpenAI/Anthropic/AWS/GitHub/Stripe tokens, database connection strings, private keys, bearer tokens), 12 sensitive file-write path patterns (`.ssh/`, `.env`, `.npmrc`, `.github/workflows/`, `/etc/`), tool allowlists/blocklists, MCP server blocklists (Cursor), network egress control, and `.sentinelflow-policy.yaml` runtime rules. All four frameworks use the same shared enterprise policy engine.
 
 **Two modes:** `monitor` logs everything but never blocks — start here. `enforce` actually blocks dangerous tool calls, with the block reason fed back to the AI model.
 
@@ -241,7 +249,7 @@ npx vitest run
 
 **Phase 1** (Complete) — Static governance scanner with 46 rules, 6 framework parsers, SARIF output, compliance mappings to OWASP LLM Top 10, EU AI Act, NIST AI RMF, MITRE ATLAS, and more. Validated against Everything Claude Code (133 findings in 32ms).
 
-**Phase 2** (Beta) — Runtime agent firewall for Claude Code, Cursor, and GitHub Copilot. Policy evaluation on every tool call (allow/block/monitor). Each framework uses its native hooks contract. Unified append-only event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection. Five built-in policies.
+**Phase 2** (Beta) — Runtime agent firewall for Claude Code, Cursor, GitHub Copilot, and Codex CLI. Policy evaluation on every tool call (allow/block/monitor) using a shared enterprise policy engine: 18 dangerous-command patterns, 15 secrets-detection patterns, 12 sensitive file-write path patterns, network egress control, tool allowlists/blocklists, and identity-based access control. 8 built-in policy classes. Sequence detection (privilege escalation, exfiltration chains). Each framework uses its native hooks contract. Unified append-only event store with governance queries (SQLite + JSONL). CLI for event tailing, blocked call review, and cost reporting.
 
 **Phase 3** (Months 4–6) — LangChain middleware interceptor. CrewAI task-level hooks. Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK. Minimal operational dashboard.
 

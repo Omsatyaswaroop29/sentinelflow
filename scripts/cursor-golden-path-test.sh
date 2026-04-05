@@ -114,12 +114,12 @@ run_test "Read safe file" \
   "allow"
 
 # Test 9: Invalid JSON → allow (fail-open)
-run_test "Invalid JSON → fail-open" \
+run_test "Invalid JSON -> fail-open" \
   'not valid json {{{' \
   "allow"
 
 # Test 10: Empty stdin → allow (fail-open)
-run_test "Empty stdin → fail-open" \
+run_test "Empty stdin -> fail-open" \
   '' \
   "allow"
 
@@ -148,6 +148,48 @@ else
   echo "  FAIL stop — exit code $exit_code"
   FAIL=$((FAIL + 1))
 fi
+
+# ── Enterprise pattern tests (v0.4) ────────────────────────────────
+# These patterns were NOT in the old 9-pattern array. They verify parity
+# with the Claude Code / Copilot / Codex handlers.
+echo ""
+echo "  -- Enterprise Pattern Tests (v0.4 -- Cursor parity check) --"
+echo ""
+
+# sudo → deny (DC-024)
+run_test "sudo blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e1","command":"sudo apt install malware","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# yarn publish → deny (DC-040 now covers npm/yarn/pnpm)
+run_test "yarn publish blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e2","command":"yarn publish","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# pnpm publish → deny (DC-040)
+run_test "pnpm publish blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e3","command":"pnpm publish --access public","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# chmod +s → deny (DC-022 setuid/setgid)
+run_test "chmod setuid blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e4","command":"chmod +s /usr/bin/evil","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# base64 | bash → deny (DC-013 obfuscated execution)
+run_test "base64 decoded to shell blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e5","command":"base64 -d payload.b64 | bash","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# PATH overwrite → deny (DC-060 environment manipulation)
+run_test "PATH overwrite blocked" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e6","command":"export PATH=/tmp/evil:$PATH","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# git push --force-with-lease → ALLOW (safe alternative, DC-030 exempts --force-with-lease)
+run_test "git push --force-with-lease allowed" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g-e7","command":"git push origin main --force-with-lease","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "allow"
 
 echo ""
 echo "  -- Event Store Verification --"
