@@ -122,3 +122,22 @@ export {
   PrivilegeEscalationDetector,
   AnomalyEngine,
 } from "./anomaly";
+
+// --- Multi-Step Sequence Detection ---
+export {
+  SequenceDetector,
+  type SequenceDetectorConfig,
+  type SequenceType,
+  type SequenceMatch,
+} from "./sequence";
+
+// --- Enhanced Data Boundary ---
+export {
+  PathClassifier,
+  EnhancedDataBoundaryPolicy,
+  extractPaths,
+  DEFAULT_CLASSIFICATION_RULES,
+  type DataClassification,
+  type ClassificationRule,
+  type AgentClearance,
+} from "./data-boundary";
