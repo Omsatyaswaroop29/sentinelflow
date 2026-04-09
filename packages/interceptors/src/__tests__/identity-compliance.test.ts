@@ -265,8 +265,8 @@ describe("Compliance Mappings", () => {
 
   it("getEvidenceSnippet returns correct content", () => {
     const snippet = getEvidenceSnippet("RT-001");
-    expect(snippet).toContain("DangerousCommandPolicy");
-    expect(snippet).toContain("18 dangerous command patterns");
+    expect(snippet).toContain("intercepts shell execution");
+    expect(snippet).toContain("18 dangerous patterns");
   });
 
   it("generateComplianceSummary produces formatted output", () => {

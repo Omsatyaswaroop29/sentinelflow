@@ -55,6 +55,19 @@ There are **8 policy classes** in `packages/interceptors/src/policies.ts` (TypeS
 
 **Important nuance:** generated production handlers currently enforce the **core subset** needed for safe runtime blocking (dangerous commands + secrets + sensitive write paths + allow/block lists). More advanced policies (data boundary classification, network allowlists, identity governance, and sequence detection) exist in TypeScript and are the next integration step for full parity.
 
+### Runtime enforcement matrix (today)
+
+| Policy / Control | TypeScript engine (`policies.ts`) | Generated hook handlers (`handler-codegen.ts`) |
+|---|---:|---:|
+| Tool allowlist | Yes | Yes |
+| Tool blocklist | Yes | Yes |
+| Dangerous command blocking (18 patterns) | Yes | Yes |
+| Secrets / credential leak prevention (15 patterns) | Yes | Yes |
+| Sensitive file write governance (12 path categories + shell redirects/`tee`) | Yes | Yes |
+| Network egress policy (7 patterns + domain allow/block lists) | Yes | Not yet |
+| Data boundary classification + clearance | Yes | Not yet |
+| Cost budgets | Yes | Not yet |
+
 ---
 
 ## Test status (production-path validation)

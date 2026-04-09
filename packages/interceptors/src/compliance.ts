@@ -77,10 +77,10 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
   {
     control_id: "RT-001",
     control_name: "Dangerous Command Detection",
-    module: "DangerousCommandPolicy + command normalizer",
+    module: "handler-codegen policy evaluator (generated handlers) + central pattern registry",
     description:
-      "Intercepts shell tool calls in real-time, normalizes commands to defeat simple obfuscation " +
-      "(quoting, flag splitting, backslash escapes), and matches against 18 dangerous patterns " +
+      "Intercepts shell tool calls in real-time, applies lightweight command normalization to reduce " +
+      "simple obfuscation, and matches against 18 dangerous patterns " +
       "including rm -rf, curl|bash, chmod 777, sudo, git push --force, npm/yarn/pnpm publish, " +
       "fork bombs, and PATH manipulation.",
     limitations: [
@@ -128,12 +128,12 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     ],
     soc2: ["CC6.1 (Logical Access Controls)", "CC7.2 (System Monitoring)"],
     evidence_snippet:
-      "SentinelFlow's DangerousCommandPolicy intercepts all shell tool calls across 4 AI coding " +
-      "platforms (Claude Code, Cursor, GitHub Copilot, Codex CLI) and evaluates them against " +
-      "18 dangerous command patterns with command normalization. In enforce mode, dangerous " +
-      "commands are blocked before execution with exit code 2, and the blocking reason is " +
-      "fed back to the AI model. All events are logged to an append-only event store. " +
-      "Validated against Claude Code v2.1.91 in a live session where rm -rf was successfully blocked.",
+      "SentinelFlow intercepts shell execution across 4 AI coding platforms (Claude Code, Cursor, GitHub " +
+      "Copilot, Codex CLI) and evaluates commands against 18 dangerous patterns with handler-safe " +
+      "normalization. In enforce mode, dangerous commands are blocked before execution (Claude/Copilot/Codex " +
+      "block via exit code 2; Cursor blocks via stdout JSON), and the blocking reason is fed back to the model. " +
+      "In monitor mode, the same matches are recorded as flagged events. All events are logged to an append-only " +
+      "event store (JSONL + optional SQLite).",
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -148,6 +148,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "in shell commands and enforces domain-level allowlists/denylists. Supports wildcard patterns " +
       "(*.corp.internal) for internal domains.",
     limitations: [
+      "TypeScript policy exists but is not yet embedded into generated hook handlers (planned parity work)",
       "Only inspects shell commands — cannot intercept network calls made by the AI model itself",
       "Cannot detect DNS-based exfiltration or ICMP tunneling",
       "Cannot inspect encrypted payloads — only controls the destination domain",
@@ -155,14 +156,14 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     ],
     owasp_llm: [
       {
-        id: "LLM06",
+        id: "LLM02",
         name: "Sensitive Information Disclosure",
         mitigation:
           "Prevents AI agents from exfiltrating sensitive data to unauthorized external domains. " +
           "Domain allowlists ensure data only flows to approved endpoints.",
       },
       {
-        id: "LLM09",
+        id: "LLM06",
         name: "Excessive Agency",
         mitigation:
           "Restricts agents' ability to make arbitrary outbound network connections, " +
@@ -186,9 +187,9 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     evidence_snippet:
       "SentinelFlow's NetworkEgressPolicy detects 7 categories of outbound network activity " +
       "in shell commands, extracts target domains, and enforces configurable allowlists/blocklists. " +
-      "In enforce mode, requests to non-approved domains are blocked before execution. " +
-      "This control addresses OWASP LLM06 (Sensitive Information Disclosure) by preventing " +
-      "AI agent-initiated data exfiltration to unauthorized endpoints.",
+      "This policy is implemented in TypeScript and is planned for embedding into generated hook handlers. " +
+      "It addresses OWASP LLM02 (Sensitive Information Disclosure) by preventing AI agent-initiated data " +
+      "exfiltration to unauthorized endpoints and OWASP LLM06 (Excessive Agency) by constraining outbound egress.",
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -211,7 +212,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     ],
     owasp_llm: [
       {
-        id: "LLM06",
+        id: "LLM02",
         name: "Sensitive Information Disclosure",
         mitigation:
           "Detects credentials being passed through tool arguments and blocks execution " +
@@ -236,7 +237,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "major cloud providers, SaaS platforms, and common authentication mechanisms. When a " +
       "credential is detected, the tool call is blocked with a deliberately vague reason " +
       "(to avoid echoing the secret), and the event is logged for security team review. " +
-      "This addresses OWASP LLM06 by preventing agent-mediated credential exposure.",
+      "This addresses OWASP LLM02 by preventing agent-mediated credential exposure.",
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -245,7 +246,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
   {
     control_id: "RT-004",
     control_name: "Sensitive File Write Governance",
-    module: "FileWritePolicy",
+    module: "handler-codegen sensitive path enforcement + central sensitive path registry",
     description:
       "Blocks writes to sensitive file paths including SSH keys, GPG keys, .env files, .npmrc, " +
       "system directories (/etc, /usr/local/bin), supply chain files (package.json, Dockerfile, " +
@@ -286,7 +287,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     ],
     soc2: ["CC6.1 (Logical Access Controls)", "CC8.1 (Change Management)"],
     evidence_snippet:
-      "SentinelFlow's FileWritePolicy prevents AI agents from writing to 12 categories of " +
+      "SentinelFlow prevents AI agents from writing to 12 categories of " +
       "sensitive file paths including SSH keys, environment files, system directories, and " +
       "CI/CD pipelines. The policy applies to both Write/Edit tools and shell redirect " +
       "operators. This addresses OWASP LLM09 (Excessive Agency) by enforcing file-level " +
@@ -306,6 +307,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "persistence probing (repeated blocked attempts), and privilege escalation chains " +
       "(write auth config→reload). Each detection includes the full event chain for investigation.",
     limitations: [
+      "TypeScript detector exists but is not yet embedded into generated hook handlers (planned parity work)",
       "Only detects known sequence patterns — novel attack chains require new rules",
       "Window is time-bounded (5 min default) — slow attacks may evade detection",
       "Cannot correlate across sessions or across different agents",
@@ -372,6 +374,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "agents are read-only). Identity is resolved from policy config, environment variables, " +
       "and CI/CD context.",
     limitations: [
+      "TypeScript policies exist but are not yet embedded into generated hook handlers (planned parity work)",
       "Identity relies on configuration — a misconfigured role grants incorrect access",
       "Cannot verify the actual human behind the session (no MFA integration yet)",
       "Environment detection is heuristic-based (environment variables, CI markers)",
@@ -438,6 +441,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "classification tiers each agent can access. Extracts paths from structured tool inputs, " +
       "not just string summaries.",
     limitations: [
+      "TypeScript policy exists but is not yet embedded into generated hook handlers (planned parity work)",
       "Path-based classification only — cannot inspect file contents",
       "Does not cover network resources, databases, or API endpoints",
       "Classification rules are static — no ML-based content classification",
@@ -445,7 +449,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     ],
     owasp_llm: [
       {
-        id: "LLM06",
+        id: "LLM02",
         name: "Sensitive Information Disclosure",
         mitigation:
           "Prevents agents from accessing files classified as restricted or system-level, " +
@@ -471,7 +475,7 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "agents into 4 sensitivity tiers (public, internal, restricted, system) using 30+ " +
       "configurable rules. Per-agent clearance levels enforce least-privilege data access: " +
       "for example, a 'reader' agent can only access public files, while a 'deployer' agent " +
-      "can access restricted files like .env. This addresses OWASP LLM06 (Sensitive Information " +
+      "can access restricted files like .env. This addresses OWASP LLM02 (Sensitive Information " +
       "Disclosure) and EU AI Act Article 10 (Data Governance).",
   },
 
