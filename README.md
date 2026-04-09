@@ -168,7 +168,7 @@ sentinelflow intercept uninstall .
 
 **How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot, `.sentinelflow/codex-handler.js` for Codex) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
 
-**Built-in policies:** 9 dangerous command patterns (`rm -rf /`, `curl | bash`, `chmod 777`, `git push --force`, `npm publish`, and more), tool allowlists/blocklists, MCP server blocklists (Cursor), and `.sentinelflow-policy.yaml` runtime rules.
+**Built-in policies:** Enterprise policy engine backed by a central registry (**18 dangerous command patterns**, **15 secret patterns**, **12 sensitive file write path patterns**, **7 network egress patterns**) plus **8 runtime policies** (allowlist, blocklist, dangerous commands, secrets leak, file write governance, network egress, data boundary, and cost budgets).
 
 **Two modes:** `monitor` logs everything but never blocks — start here. `enforce` actually blocks dangerous tool calls, with the block reason fed back to the AI model.
 
@@ -241,7 +241,7 @@ npx vitest run
 
 **Phase 1** (Complete) — Static governance scanner with 46 rules, 6 framework parsers, SARIF output, compliance mappings to OWASP LLM Top 10, EU AI Act, NIST AI RMF, MITRE ATLAS, and more. Validated against Everything Claude Code (133 findings in 32ms).
 
-**Phase 2** (Beta) — Runtime agent firewall for Claude Code, Cursor, and GitHub Copilot. Policy evaluation on every tool call (allow/block/monitor). Each framework uses its native hooks contract. Unified append-only event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection. Five built-in policies.
+**Phase 2** (Beta) — Runtime agent firewall for Claude Code, Cursor, GitHub Copilot, and Codex CLI. Policy evaluation on every tool call (allow/block/monitor). Each framework uses its native hooks contract. Unified append-only event store with governance queries. CLI for event tailing, blocked call review, and cost reporting. Anomaly detection. Eight built-in policies.
 
 **Phase 3** (Months 4–6) — LangChain middleware interceptor. CrewAI task-level hooks. Policy engine with approval workflows. EU AI Act, SOC 2, and ISO 42001 compliance packs. Python SDK. Minimal operational dashboard.
 

@@ -98,6 +98,36 @@ run_test "git push --force" \
   '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5","command":"git push origin main --force","cwd":"/tmp","workspace_roots":["/tmp"]}' \
   "deny"
 
+# Test 5b: git push --force-with-lease → allow (guard against false positive)
+run_test "git push --force-with-lease (allowed)" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5b","command":"git push origin main --force-with-lease","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "allow"
+
+# Test 5c: sudo → deny
+run_test "sudo usage" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5c","command":"sudo cat /etc/shadow","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# Test 5d: yarn publish → deny
+run_test "yarn publish" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5d","command":"yarn publish","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# Test 5e: pnpm publish → deny
+run_test "pnpm publish" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5e","command":"pnpm publish","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# Test 5f: chmod +s → deny
+run_test "chmod +s (setuid/setgid)" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5f","command":"chmod +s ./bin/helper","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
+# Test 5g: PATH manipulation → deny
+run_test "PATH manipulation" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-001","generation_id":"g5g","command":"export PATH=/tmp/bin:$PATH","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
+
 # Test 6: Safe MCP tool → allow
 run_test "Safe MCP tool call" \
   '{"hook_event_name":"beforeMCPExecution","conversation_id":"gp-001","generation_id":"g6","tool_name":"gitbutler_update","tool_input":"{}","command":"but","workspace_roots":["/tmp"]}' \

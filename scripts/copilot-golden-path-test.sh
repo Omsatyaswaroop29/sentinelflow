@@ -87,6 +87,36 @@ run_test "git push --force" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"git push origin main --force\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
   2 "force push"
 
+# Test 5b: git push --force-with-lease -> allow (guard against false positive)
+run_test "git push --force-with-lease (allowed)" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"git push origin main --force-with-lease\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  0 ""
+
+# Test 5c: sudo -> block
+run_test "sudo usage" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"sudo cat /etc/shadow\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "sudo"
+
+# Test 5d: yarn publish -> block
+run_test "yarn publish" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"yarn publish\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "publish"
+
+# Test 5e: pnpm publish -> block
+run_test "pnpm publish" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"pnpm publish\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "publish"
+
+# Test 5f: chmod +s -> block
+run_test "chmod +s (setuid/setgid)" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"chmod +s ./bin/helper\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "chmod"
+
+# Test 5g: PATH manipulation -> block
+run_test "PATH manipulation" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"export PATH=/tmp/bin:$PATH\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "PATH"
+
 # Test 6: Safe edit tool -> allow
 run_test "Safe edit tool" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"edit","toolArgs":"{\"file\":\"src/app.ts\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \

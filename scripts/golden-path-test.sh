@@ -95,6 +95,36 @@ run_test "git push --force" \
   '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main --force"},"session_id":"gp-001","cwd":"/tmp"}' \
   2 "force push"
 
+# git push --force-with-lease -> allow (guard against false positive)
+run_test "git push --force-with-lease (allowed)" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main --force-with-lease"},"session_id":"gp-001","cwd":"/tmp"}' \
+  0 ""
+
+# sudo -> block
+run_test "sudo usage" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"sudo cat /etc/shadow"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "sudo"
+
+# yarn publish -> block
+run_test "yarn publish" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"yarn publish"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "publish"
+
+# pnpm publish -> block
+run_test "pnpm publish" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pnpm publish"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "publish"
+
+# chmod +s -> block
+run_test "chmod +s (setuid/setgid)" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"chmod +s ./bin/helper"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "chmod"
+
+# PATH manipulation -> block
+run_test "PATH manipulation" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"export PATH=/tmp/bin:$PATH"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "PATH"
+
 # Safe bash -> allow
 run_test "Safe npm test" \
   '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"},"session_id":"gp-001","cwd":"/tmp"}' \

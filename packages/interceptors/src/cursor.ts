@@ -63,6 +63,7 @@ import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
+import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
   InterceptorConfig,
   PolicyProvider,
@@ -370,6 +371,8 @@ export class CursorInterceptor extends BaseInterceptor {
    *   - Fail-open means: output `{ "permission": "allow" }` on any error
    */
   private generateHandlerScript(): string {
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+
     return `#!/usr/bin/env node
 /**
  * SentinelFlow Cursor Hook Handler
@@ -506,28 +509,8 @@ function makeEvent(type, outcome, severity, opts = {}) {
   };
 }
 
-// ─── Dangerous Command Detection ────────────────────────────
-// Same patterns as Claude Code handler — consistency across frameworks
-const DANGEROUS_PATTERNS = [
-  { pattern: /rm\\s+-rf\\s+\\/(?!tmp)/, label: "rm -rf outside /tmp" },
-  { pattern: /curl\\s+.*\\|\\s*(bash|sh|zsh)/, label: "curl piped to shell" },
-  { pattern: /wget\\s+.*\\|\\s*(bash|sh|zsh)/, label: "wget piped to shell" },
-  { pattern: /chmod\\s+777/, label: "chmod 777" },
-  { pattern: />(\\s*)\\/etc\\//, label: "write to /etc" },
-  { pattern: /\\bdd\\b.*\\bof=\\/dev\\//, label: "dd to block device" },
-  { pattern: /mkfs\\./, label: "filesystem format" },
-  { pattern: /\\bnpm\\s+publish\\b/, label: "npm publish" },
-  { pattern: /\\bgit\\s+push\\b.*--force/, label: "force push" },
-];
-
-function checkDangerousCommand(cmd) {
-  for (const { pattern, label } of DANGEROUS_PATTERNS) {
-    if (pattern.test(cmd)) {
-      return { dangerous: true, label, command: cmd };
-    }
-  }
-  return { dangerous: false };
-}
+// ─── Enterprise Policy Evaluation (from central registry) ───
+${policyCode}
 
 function checkReadFileBlocked(filePath) {
   for (const pattern of READ_FILE_BLOCK_PATTERNS) {
@@ -599,23 +582,24 @@ function denyResponse(userMsg, agentMsg) {
       const cmd = input.command || "";
       const inputSummary = cmd.slice(0, MAX_INPUT_LENGTH);
 
-      // Check dangerous command patterns
-      if (ENFORCEMENT_MODE === "enforce") {
-        const check = checkDangerousCommand(cmd);
-        if (check.dangerous) {
-          const reason = "Dangerous command: " + check.label + " \\u2014 " + cmd.slice(0, 100);
-          persistEvent(makeEvent(
-            "tool_call_blocked", "blocked", "high",
-            { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
-              action: inputSummary, policy_id: "dangerous_commands", reason,
-              payload: { hook: "beforeShellExecution", cwd: input.cwd, workspace_roots: input.workspace_roots } }
-          ));
-          process.stdout.write(denyResponse(
-            "SentinelFlow: " + reason,
-            "This command was blocked by a SentinelFlow governance policy. " + reason + ". Try a safer alternative."
-          ));
-          process.exit(0);
-        }
+      // Cursor sends "command" as a direct field; evaluate as Bash input.
+      // NOTE: Cursor blocks via stdout JSON, not exit codes.
+      const policy = evaluatePolicy("Bash", { command: cmd });
+      const isBlock = !!policy.block;
+
+      if (isBlock) {
+        const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
+        persistEvent(makeEvent(
+          "tool_call_blocked", "blocked", "high",
+          { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
+            action: inputSummary, policy_id: policy.id || null, reason,
+            payload: { hook: "beforeShellExecution", cwd: input.cwd, workspace_roots: input.workspace_roots } }
+        ));
+        process.stdout.write(denyResponse(
+          "SentinelFlow: " + reason,
+          "This command was blocked by a SentinelFlow governance policy. " + reason + ". Try a safer alternative."
+        ));
+        process.exit(0);
       }
 
       // Allowed — log and proceed
