@@ -85,6 +85,12 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
   L(`function evaluatePolicy(toolName, toolInput) {`);
   L(`  if (TOOL_BLOCKLIST.has(toolName))`);
   L(`    return { block: true, reason: "Tool \\"" + toolName + "\\" is in the blocklist", id: "tool_blocklist" };`);
+  L(`  // Tool allowlist semantics: if allowlist is configured, deny everything not explicitly allowed.`);
+  L(`  // In monitor mode we do not block, but we still return a reason/id for logging parity.`);
+  L(`  if (TOOL_ALLOWLIST.size > 0 && !TOOL_ALLOWLIST.has(toolName)) {`);
+  L(`    var enforce = ENFORCEMENT_MODE === "enforce";`);
+  L(`    return { block: enforce, reason: "Tool \\"" + toolName + "\\" is not in the allowlist", id: "tool_allowlist" };`);
+  L(`  }`);
   L(`  if (TOOL_ALLOWLIST.size > 0 && TOOL_ALLOWLIST.has(toolName))`);
   L(`    return { block: false };`);
   L(``);

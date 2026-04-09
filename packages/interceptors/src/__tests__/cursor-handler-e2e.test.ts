@@ -238,6 +238,28 @@ describe("Cursor Handler Script (E2E)", () => {
     expect(mcpEvent.outcome).toBe("allowed");
   });
 
+  it("blocks an MCP tool call that contains a secret in tool_input", async () => {
+    const input = JSON.stringify({
+      hook_event_name: "beforeMCPExecution",
+      conversation_id: "test-conv-006b",
+      generation_id: "test-gen-006b",
+      tool_name: "some_mcp_tool",
+      tool_input: JSON.stringify({ authorization: "Bearer sk-abc123def456ghi789jkl012mno345pqr678" }),
+      command: "some-server",
+      workspace_roots: [tmpDir],
+    });
+
+    const result = await runHandler(handlerPath, input);
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed.permission).toBe("deny");
+    expect(result.parsed.userMessage).toContain("Secret detected");
+
+    const events = readEventLog(tmpDir);
+    const blocked = events.find((e) => e.outcome === "blocked");
+    expect(blocked).toBeDefined();
+    expect(blocked.policy_id).toBe("secrets_leak");
+  });
+
   // ── beforeMCPExecution: blocklisted tool → deny ───────────
 
   it("blocks a blocklisted MCP tool", async () => {

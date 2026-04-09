@@ -126,6 +126,40 @@ describe("Claude Code Handler Script (E2E)", () => {
     cleanup(tmpDir);
   });
 
+  it("enforces tool allowlist in enforce mode (blocks tools not in allowlist)", async () => {
+    // Create a separate temp project so we can generate a handler with allowlist baked in
+    const project = createTempProject();
+    const interceptor = new ClaudeCodeInterceptor({
+      projectDir: project,
+      enforcement_mode: "enforce",
+      toolAllowlist: ["Read"],
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    const hp = path.join(project, ".sentinelflow", "handler.js");
+    const handlerContent = fs.readFileSync(hp, "utf-8");
+    await interceptor.stop();
+
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    fs.writeFileSync(hp, handlerContent);
+    fs.chmodSync(hp, "755");
+
+    // Bash is NOT in allowlist => block
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+      session_id: "test-session-allowlist-001",
+      cwd: project,
+    });
+    const result = await runHandler(hp, input);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("allowlist");
+
+    cleanup(project);
+  });
+
   // ── Contract Test: Safe PreToolUse → exit 0 (allow) ────────
 
   it("allows a safe Read tool call (exit 0)", async () => {

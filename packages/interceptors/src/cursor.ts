@@ -653,6 +653,23 @@ function denyResponse(userMsg, agentMsg) {
         process.exit(0);
       }
 
+      // Enterprise policy evaluation (secrets, sensitive paths, allowlist semantics, etc.)
+      const policy = evaluatePolicy(toolName, toolInput);
+      if (policy && policy.block) {
+        const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
+        persistEvent(makeEvent(
+          "tool_call_blocked", "blocked", "high",
+          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+            action: inputSummary, policy_id: policy.id || null, reason,
+            payload: { hook: "beforeMCPExecution", server: serverName } }
+        ));
+        process.stdout.write(denyResponse(
+          "SentinelFlow: " + reason,
+          "This MCP tool call was blocked by a SentinelFlow governance policy. " + reason
+        ));
+        process.exit(0);
+      }
+
       // Allowed
       persistEvent(makeEvent(
         "tool_call_attempted", "allowed", "info",
