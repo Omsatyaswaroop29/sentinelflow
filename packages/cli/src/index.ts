@@ -75,6 +75,8 @@ intercept
   .option("--mode <mode>", "Enforcement mode: monitor, enforce", "monitor")
   .option("--blocklist <tools>", "Comma-separated tools to block")
   .option("--allowlist <tools>", "Comma-separated tools to allow (blocks all others)")
+  .option("--egress-allow <domains>", "Comma-separated domains to allow for outbound egress (exact or wildcard like \"*.corp.internal\")")
+  .option("--egress-block <domains>", "Comma-separated domains to block for outbound egress (exact matches)")
   .option("--budget <usd>", "Max cost per session in USD")
   .action(interceptInstallCommand);
 
@@ -110,6 +112,8 @@ intercept
   .option("--mode <mode>", "Enforcement mode: monitor, enforce", "enforce")
   .option("--blocklist <tools>", "Comma-separated tools to block")
   .option("--allowlist <tools>", "Comma-separated tools to allow")
+  .option("--egress-allow <domains>", "Comma-separated domains to allow for outbound egress")
+  .option("--egress-block <domains>", "Comma-separated domains to block for outbound egress")
   .action(interceptTestCommand);
 
 // ── sentinelflow events ─────────────────────────────────────

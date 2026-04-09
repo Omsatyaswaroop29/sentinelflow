@@ -15,6 +15,7 @@
 
 import {
   DANGEROUS_COMMAND_PATTERNS,
+  NETWORK_EGRESS_PATTERNS,
   SECRET_PATTERNS,
   SENSITIVE_WRITE_PATHS,
   SHELL_TOOL_NAMES,
@@ -31,6 +32,10 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
 
   const secrets = JSON.stringify(SECRET_PATTERNS.map((p) => ({
     id: p.id, regex: p.regex, flags: p.flags ?? "", label: p.description,
+  })));
+
+  const networkEgress = JSON.stringify(NETWORK_EGRESS_PATTERNS.map((p) => ({
+    id: p.id, regex: p.regex, urlGroupIndex: p.urlGroupIndex ?? 0, label: p.description,
   })));
 
   const sensitivePaths = JSON.stringify(SENSITIVE_WRITE_PATHS.map((p) => ({
@@ -135,6 +140,53 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
   L(`  catch(e) { return null; }`);
   L(`}).filter(Boolean);`);
   L(``);
+
+  L(`var _sfNetworkEgress = ${networkEgress}.map(function(p) {`);
+  L(`  try { return { id: p.id, re: new RegExp(p.regex, "i"), urlGroupIndex: p.urlGroupIndex, label: p.label }; }`);
+  L(`  catch(e) { return null; }`);
+  L(`}).filter(Boolean);`);
+  L(``);
+
+  L(`function _sfExtractDomain(s) {`);
+  L(`  if (!s) return "";`);
+  L(`  var t = _sfStripQuotes(String(s));`);
+  L(`  var at = t.lastIndexOf("@");`);
+  L(`  if (at !== -1 && at + 1 < t.length) t = t.slice(at + 1);`);
+  L(`  var scheme = t.indexOf("://");`);
+  L(`  if (scheme !== -1) t = t.slice(scheme + 3);`);
+  L(`  var slash = t.indexOf("/");`);
+  L(`  if (slash !== -1) t = t.slice(0, slash);`);
+  L(`  var colon = t.indexOf(":");`);
+  L(`  if (colon !== -1) t = t.slice(0, colon);`);
+  L(`  t = t.replace(/^\\[|\\]$/g, "");`);
+  L(`  t = t.toLowerCase().replace(/[^a-z0-9._-]/g, "");`);
+  L(`  return t;`);
+  L(`}`);
+  L(``);
+
+  L(`function _sfIsDomainAllowed(domain) {`);
+  L(`  if (!domain) return true;`);
+  L(`  var allowed = Array.isArray(EGRESS_ALLOWED_DOMAINS) ? EGRESS_ALLOWED_DOMAINS : [];`);
+  L(`  var blocked = Array.isArray(EGRESS_BLOCKED_DOMAINS) ? EGRESS_BLOCKED_DOMAINS : [];`);
+  L(`  var blockedSet = new Set(blocked.map(function(d){ return String(d || "").toLowerCase(); }));`);
+  L(`  if (blockedSet.has(domain)) return false;`);
+  L(`  var allowExact = new Set();`);
+  L(`  var allowWild = [];`);
+  L(`  for (var i = 0; i < allowed.length; i++) {`);
+  L(`    var d = String(allowed[i] || "").toLowerCase();`);
+  L(`    if (!d) continue;`);
+  L(`    if (d.indexOf("*.") === 0) allowWild.push(d.slice(2));`);
+  L(`    else allowExact.add(d);`);
+  L(`  }`);
+  L(`  if (allowExact.size === 0 && allowWild.length === 0) return true;`);
+  L(`  if (allowExact.has(domain)) return true;`);
+  L(`  for (var w = 0; w < allowWild.length; w++) {`);
+  L(`    if (domain === allowWild[w] || domain.endsWith("." + allowWild[w])) return true;`);
+  L(`  }`);
+  L(`  return false;`);
+  L(`}`);
+  L(``);
+
   L(`var _sfSensitivePaths = ${sensitivePaths}.map(function(p) {`);
   L(`  try { return { id: p.id, re: new RegExp(p.regex, "i"), label: p.label }; }`);
   L(`  catch(e) { return null; }`);
@@ -182,6 +234,18 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
   L(`      for (var s = 0; s < _sfSecrets.length; s++) {`);
   L(`        if (_sfSecrets[s].re.test(cmdForSecrets)) {`);
   L(`          return { block: enforce, flag: true, reason: "Secret detected [" + _sfSecrets[s].id + "]: " + _sfSecrets[s].label, id: "secrets_leak" };`);
+  L(`        }`);
+  L(`      }`);
+  L(``);
+  L(`      // Network egress governance (domain allow/block lists)`);
+  L(`      for (var ne = 0; ne < _sfNetworkEgress.length; ne++) {`);
+  L(`        var m = cmdForSecrets.match(_sfNetworkEgress[ne].re);`);
+  L(`        if (m) {`);
+  L(`          var urlOrHost = m[_sfNetworkEgress[ne].urlGroupIndex] || m[0] || "";`);
+  L(`          var domain = _sfExtractDomain(urlOrHost);`);
+  L(`          if (domain && !_sfIsDomainAllowed(domain)) {`);
+  L(`            return { block: enforce, flag: true, reason: "Network egress [" + _sfNetworkEgress[ne].id + "]: " + _sfNetworkEgress[ne].label + " — domain: " + domain, id: "network_egress" };`);
+  L(`          }`);
   L(`        }`);
   L(`      }`);
   L(``);

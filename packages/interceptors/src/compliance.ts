@@ -148,7 +148,6 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
       "in shell commands and enforces domain-level allowlists/denylists. Supports wildcard patterns " +
       "(*.corp.internal) for internal domains.",
     limitations: [
-      "TypeScript policy exists but is not yet embedded into generated hook handlers (planned parity work)",
       "Only inspects shell commands — cannot intercept network calls made by the AI model itself",
       "Cannot detect DNS-based exfiltration or ICMP tunneling",
       "Cannot inspect encrypted payloads — only controls the destination domain",
@@ -187,7 +186,8 @@ export const RUNTIME_COMPLIANCE_MAPPINGS: ComplianceMapping[] = [
     evidence_snippet:
       "SentinelFlow's NetworkEgressPolicy detects 7 categories of outbound network activity " +
       "in shell commands, extracts target domains, and enforces configurable allowlists/blocklists. " +
-      "This policy is implemented in TypeScript and is planned for embedding into generated hook handlers. " +
+      "This control is enforced in generated hook handlers (Claude Code, Cursor, GitHub Copilot, Codex CLI) " +
+      "using the central network egress pattern registry and per-install domain allow/block lists. " +
       "It addresses OWASP LLM02 (Sensitive Information Disclosure) by preventing AI agent-initiated data " +
       "exfiltration to unauthorized endpoints and OWASP LLM06 (Excessive Agency) by constraining outbound egress.",
   },

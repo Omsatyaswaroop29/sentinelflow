@@ -62,6 +62,10 @@ export interface CodexInterceptorConfig extends Partial<InterceptorConfig> {
   maxLogSizeBytes?: number;
   toolAllowlist?: string[];
   toolBlocklist?: string[];
+  /** Allowed outbound domains for network egress governance (exact or wildcard like "*.corp.internal") */
+  egressAllowedDomains?: string[];
+  /** Blocked outbound domains for network egress governance (exact matches) */
+  egressBlockedDomains?: string[];
   maxInputSummaryLength?: number;
 }
 
@@ -86,6 +90,8 @@ export class CodexInterceptor extends BaseInterceptor {
   private _maxLogSize: number;
   private _toolAllowlist: Set<string>;
   private _toolBlocklist: Set<string>;
+  private _egressAllowedDomains: string[];
+  private _egressBlockedDomains: string[];
   private _maxInputLength: number;
   private _originalHooksJson: string | null = null;
 
@@ -98,6 +104,8 @@ export class CodexInterceptor extends BaseInterceptor {
     this._maxLogSize = config.maxLogSizeBytes ?? DEFAULT_MAX_LOG_SIZE;
     this._toolAllowlist = new Set(config.toolAllowlist ?? []);
     this._toolBlocklist = new Set(config.toolBlocklist ?? []);
+    this._egressAllowedDomains = [...(config.egressAllowedDomains ?? [])];
+    this._egressBlockedDomains = [...(config.egressBlockedDomains ?? [])];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
   }
 
@@ -270,6 +278,8 @@ const EVENT_LOG = path.join(SF_DIR, "events.jsonl");
 const DB_PATH = path.join(SF_DIR, "events.db");
 const TOOL_ALLOWLIST = new Set(${JSON.stringify([...this._toolAllowlist])});
 const TOOL_BLOCKLIST = new Set(${JSON.stringify([...this._toolBlocklist])});
+const EGRESS_ALLOWED_DOMAINS = ${JSON.stringify(this._egressAllowedDomains)};
+const EGRESS_BLOCKED_DOMAINS = ${JSON.stringify(this._egressBlockedDomains)};
 const ENFORCEMENT_MODE = ${JSON.stringify(this.enforcementMode)};
 const MAX_INPUT_LENGTH = ${this._maxInputLength};
 

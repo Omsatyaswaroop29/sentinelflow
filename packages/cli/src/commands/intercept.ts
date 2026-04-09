@@ -71,7 +71,15 @@ function isInstalled(projectDir: string): { installed: boolean; framework?: Fram
 
 export async function interceptInstallCommand(
   targetPath: string,
-  options: { mode?: string; blocklist?: string; allowlist?: string; budget?: string; framework?: string }
+  options: {
+    mode?: string;
+    blocklist?: string;
+    allowlist?: string;
+    budget?: string;
+    framework?: string;
+    egressAllow?: string;
+    egressBlock?: string;
+  }
 ): Promise<void> {
   const projectDir = path.resolve(targetPath);
   if (!fs.existsSync(projectDir)) { console.error(`\n  Error: Directory not found: ${projectDir}\n`); process.exit(1); }
@@ -80,6 +88,8 @@ export async function interceptInstallCommand(
   const mode = (options.mode ?? "monitor") as "monitor" | "enforce";
   const toolBlocklist = options.blocklist ? options.blocklist.split(",").map((t) => t.trim()) : undefined;
   const toolAllowlist = options.allowlist ? options.allowlist.split(",").map((t) => t.trim()) : undefined;
+  const egressAllowedDomains = options.egressAllow ? options.egressAllow.split(",").map((d) => d.trim()).filter(Boolean) : undefined;
+  const egressBlockedDomains = options.egressBlock ? options.egressBlock.split(",").map((d) => d.trim()).filter(Boolean) : undefined;
 
   console.log("");
   console.log("  SentinelFlow Runtime Agent Firewall");
@@ -90,6 +100,8 @@ export async function interceptInstallCommand(
   console.log(`  Mode:        ${mode}`);
   if (toolBlocklist) console.log(`  Blocklist:   ${toolBlocklist.join(", ")}`);
   if (toolAllowlist) console.log(`  Allowlist:   ${toolAllowlist.join(", ")}`);
+  if (egressAllowedDomains) console.log(`  Egress allow: ${egressAllowedDomains.join(", ")}`);
+  if (egressBlockedDomains) console.log(`  Egress block: ${egressBlockedDomains.join(", ")}`);
 
   // Check existing installation
   const existing = isInstalled(projectDir);
@@ -102,7 +114,15 @@ export async function interceptInstallCommand(
   }
 
   // Install
-  const commonConfig = { projectDir, enforcement_mode: mode, toolBlocklist, toolAllowlist, log_level: "silent" as const };
+  const commonConfig = {
+    projectDir,
+    enforcement_mode: mode,
+    toolBlocklist,
+    toolAllowlist,
+    egressAllowedDomains,
+    egressBlockedDomains,
+    log_level: "silent" as const,
+  };
 
   if (framework === "claude-code") {
     await new ClaudeCodeInterceptor(commonConfig).start();

