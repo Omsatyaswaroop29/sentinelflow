@@ -97,6 +97,44 @@ describe("Copilot Handler Script (E2E)", () => {
     cleanup(tmpDir);
   });
 
+  it("flags dangerous commands in monitor mode (exit 0, event_type tool_call_flagged)", async () => {
+    const project = createTempProject();
+    const interceptor = new CopilotInterceptor({
+      projectDir: project,
+      enforcement_mode: "monitor",
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    const hp = path.join(project, ".sentinelflow", "copilot-handler.js");
+    expect(fs.existsSync(hp)).toBe(true);
+    const handlerContent = fs.readFileSync(hp, "utf-8");
+    await interceptor.stop();
+
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    fs.writeFileSync(hp, handlerContent);
+    fs.chmodSync(hp, "755");
+
+    const input = JSON.stringify({
+      timestamp: Date.now(),
+      cwd: project,
+      sessionId: "monitor-001",
+      hookEventName: "PreToolUse",
+      toolName: "bash",
+      toolArgs: JSON.stringify({ command: "rm -rf /home/user/data" }),
+    });
+
+    const result = await runHandler(hp, input);
+    expect(result.exitCode).toBe(0);
+
+    const events = readEventLog(project);
+    const flagged = events.find((e) => e.event_type === "tool_call_flagged");
+    expect(flagged).toBeDefined();
+    expect(flagged.policy_id).toBe("dangerous_commands");
+
+    cleanup(project);
+  });
+
   // ── preToolUse: safe command → allow (exit 0) ─────────────
 
   it("allows a safe bash command (exit 0)", async () => {

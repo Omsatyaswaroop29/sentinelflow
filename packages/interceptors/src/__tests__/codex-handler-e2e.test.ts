@@ -77,6 +77,41 @@ describe("Codex Handler Script (E2E)", () => {
 
   afterEach(() => { cleanup(tmpDir); });
 
+  it("flags dangerous commands in monitor mode (exit 0, event_type tool_call_flagged)", async () => {
+    const project = createTempProject();
+    const interceptor = new CodexInterceptor({
+      projectDir: project,
+      enforcement_mode: "monitor",
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    const hp = path.join(project, ".sentinelflow", "codex-handler.js");
+    expect(fs.existsSync(hp)).toBe(true);
+    const handlerContent = fs.readFileSync(hp, "utf-8");
+    await interceptor.stop();
+
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    fs.writeFileSync(hp, handlerContent);
+    fs.chmodSync(hp, "755");
+
+    const result = await runHandler(hp, JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "rm -rf /home/user/data" },
+      session_id: "monitor-001",
+      cwd: project,
+    }));
+
+    expect(result.exitCode).toBe(0);
+    const events = readEventLog(project);
+    const flagged = events.find((e) => e.event_type === "tool_call_flagged");
+    expect(flagged).toBeDefined();
+    expect(flagged.policy_id).toBe("dangerous_commands");
+
+    cleanup(project);
+  });
+
   // ── PreToolUse: safe command → allow (exit 0) ─────────────
 
   it("allows a safe Bash command (exit 0)", async () => {

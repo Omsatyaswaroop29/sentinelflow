@@ -126,6 +126,43 @@ describe("Claude Code Handler Script (E2E)", () => {
     cleanup(tmpDir);
   });
 
+  it("flags dangerous commands in monitor mode (exit 0, event_type tool_call_flagged)", async () => {
+    const project = createTempProject();
+    const interceptor = new ClaudeCodeInterceptor({
+      projectDir: project,
+      enforcement_mode: "monitor",
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    const hp = path.join(project, ".sentinelflow", "handler.js");
+    const handlerContent = fs.readFileSync(hp, "utf-8");
+    await interceptor.stop();
+
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    fs.writeFileSync(hp, handlerContent);
+    fs.chmodSync(hp, "755");
+
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "rm -rf /home/user/important" },
+      session_id: "test-session-monitor-001",
+      cwd: project,
+    });
+
+    const result = await runHandler(hp, input);
+    expect(result.exitCode).toBe(0);
+
+    const events = readEventLog(project);
+    const flagged = events.find((e) => e.event_type === "tool_call_flagged");
+    expect(flagged).toBeDefined();
+    expect(flagged.policy_id).toBe("dangerous_commands");
+    expect(flagged.reason).toContain("rm -rf");
+
+    cleanup(project);
+  });
+
   it("enforces tool allowlist in enforce mode (blocks tools not in allowlist)", async () => {
     // Create a separate temp project so we can generate a handler with allowlist baked in
     const project = createTempProject();

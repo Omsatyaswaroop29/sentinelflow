@@ -476,11 +476,12 @@ function summarizeToolArgs(toolName, parsedArgs) {
 
       const policy = evaluatePolicy(toolName, parsedArgs);
       const isBlock = policy.block;
+      const isFlag = !isBlock && policy.flag;
 
       persistEvent(makeEvent(
-        isBlock ? "tool_call_blocked" : "tool_call_attempted",
+        isBlock ? "tool_call_blocked" : (isFlag ? "tool_call_flagged" : "tool_call_attempted"),
         isBlock ? "blocked" : "allowed",
-        isBlock ? "high" : "info",
+        isBlock ? "high" : (isFlag ? "medium" : "info"),
         { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
           action: inputSummary, policy_id: policy.id, reason: policy.reason,
           payload: { hook: "preToolUse", cwd: input.cwd } }

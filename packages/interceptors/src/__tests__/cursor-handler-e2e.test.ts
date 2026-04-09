@@ -110,6 +110,45 @@ describe("Cursor Handler Script (E2E)", () => {
     cleanup(tmpDir);
   });
 
+  it("flags dangerous shell commands in monitor mode (permission: allow, event_type tool_call_flagged)", async () => {
+    const project = createTempProject();
+    const interceptor = new CursorInterceptor({
+      projectDir: project,
+      enforcement_mode: "monitor",
+      log_level: "silent",
+    });
+    await interceptor.start();
+
+    const hp = path.join(project, ".sentinelflow", "cursor-handler.js");
+    expect(fs.existsSync(hp)).toBe(true);
+    const handlerContent = fs.readFileSync(hp, "utf-8");
+    await interceptor.stop();
+
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    fs.writeFileSync(hp, handlerContent);
+    fs.chmodSync(hp, "755");
+
+    const input = JSON.stringify({
+      hook_event_name: "beforeShellExecution",
+      conversation_id: "monitor-conv-001",
+      generation_id: "monitor-gen-001",
+      command: "rm -rf /home/user/data",
+      cwd: project,
+      workspace_roots: [project],
+    });
+
+    const result = await runHandler(hp, input);
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed.permission).toBe("allow");
+
+    const events = readEventLog(project);
+    const flagged = events.find((e) => e.event_type === "tool_call_flagged");
+    expect(flagged).toBeDefined();
+    expect(flagged.policy_id).toBe("dangerous_commands");
+
+    cleanup(project);
+  });
+
   // ── beforeShellExecution: safe command → allow ─────────────
 
   it("allows a safe shell command via stdout JSON { permission: allow }", async () => {

@@ -586,6 +586,7 @@ function denyResponse(userMsg, agentMsg) {
       // NOTE: Cursor blocks via stdout JSON, not exit codes.
       const policy = evaluatePolicy("Bash", { command: cmd });
       const isBlock = !!policy.block;
+      const isFlag = !isBlock && !!policy.flag;
 
       if (isBlock) {
         const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
@@ -604,9 +605,9 @@ function denyResponse(userMsg, agentMsg) {
 
       // Allowed — log and proceed
       persistEvent(makeEvent(
-        "tool_call_attempted", "allowed", "info",
+        isFlag ? "tool_call_flagged" : "tool_call_attempted", "allowed", isFlag ? "medium" : "info",
         { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
-          action: inputSummary,
+          action: inputSummary, policy_id: isFlag ? (policy.id || null) : null, reason: isFlag ? (policy.reason || null) : null,
           payload: { hook: "beforeShellExecution", cwd: input.cwd } }
       ));
       process.stdout.write(allowResponse());
@@ -655,6 +656,7 @@ function denyResponse(userMsg, agentMsg) {
 
       // Enterprise policy evaluation (secrets, sensitive paths, allowlist semantics, etc.)
       const policy = evaluatePolicy(toolName, toolInput);
+      const isFlag = policy && !policy.block && policy.flag;
       if (policy && policy.block) {
         const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
         persistEvent(makeEvent(
@@ -672,9 +674,9 @@ function denyResponse(userMsg, agentMsg) {
 
       // Allowed
       persistEvent(makeEvent(
-        "tool_call_attempted", "allowed", "info",
+        isFlag ? "tool_call_flagged" : "tool_call_attempted", "allowed", isFlag ? "medium" : "info",
         { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
-          action: inputSummary,
+          action: inputSummary, policy_id: isFlag ? (policy.id || null) : null, reason: isFlag ? (policy.reason || null) : null,
           payload: { hook: "beforeMCPExecution", server: serverName } }
       ));
       process.stdout.write(allowResponse());
