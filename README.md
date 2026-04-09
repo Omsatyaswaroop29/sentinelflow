@@ -247,6 +247,10 @@ npx vitest run
 
 **Phase 4** (Months 7–12) — Multi-tenant SaaS. SSO/SAML. SIEM integration. Shadow agent discovery across the organization.
 
+## Project Status
+
+For a detailed, enterprise-oriented snapshot (current capabilities, validation, and roadmap), see `docs/PROJECT-STATUS.md`.
+
 ## License
 
 MIT

@@ -1,7 +1,14 @@
 # SentinelFlow Phase 2: Golden Path Integration Checklist
 
 This document is the manual validation script for verifying SentinelFlow's runtime
-layer works end-to-end against a real Claude Code project.
+layer works end-to-end against a real project.
+
+Automated golden-path scripts are also available and are the preferred contract check:
+
+- `scripts/golden-path-test.sh` (Claude Code)
+- `scripts/cursor-golden-path-test.sh` (Cursor)
+- `scripts/copilot-golden-path-test.sh` (GitHub Copilot)
+- `scripts/codex-golden-path-test.sh` (Codex CLI)
 
 ## Prerequisites
 
@@ -166,8 +173,9 @@ These are explicitly NOT handled yet:
    token counts or cost info in hook events. The cost columns will be NULL until
    this is available or we estimate from model+tool.
 
-2. **Other frameworks**: Phase 2 only supports Claude Code. LangChain, CrewAI,
-   Cursor, and Copilot Studio interceptors are planned for Phase 3.
+2. **Advanced enterprise policies**: Some higher-level governance capabilities
+   (sequence detection, identity governance, richer boundary policies) exist in
+   TypeScript but may not be fully enforced inside generated handler scripts yet.
 
 3. **Dynamic policy reloading**: Changing `.sentinelflow-policy.yaml` requires
    reinstalling hooks (`sentinelflow intercept install`).

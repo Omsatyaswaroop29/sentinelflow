@@ -24,12 +24,10 @@ A new package that hooks into AI agent frameworks at runtime and emits normalize
 - Supports `monitor` mode (log only) and `enforce` mode (actually block)
 - Writes all events to `.sentinelflow/events.jsonl`
 
-**5 built-in policies:**
-1. `ToolAllowlistPolicy` — Only allow explicitly listed tools
-2. `ToolBlocklistPolicy` — Block specific tools
-3. `DangerousCommandPolicy` — 12 dangerous bash patterns (rm -rf, curl|bash, chmod 777, git push --force, etc.)
-4. `CostBudgetPolicy` — Block when session cost exceeds budget
-5. `DataBoundaryPolicy` — Block access to sensitive paths/patterns
+**Enterprise policy engine (current):**
+- **Central pattern registry** with 18 dangerous command patterns, 15 secret patterns, 12 sensitive file write patterns, and 7 network egress patterns.
+- **8 policy classes** implemented in TypeScript (`packages/interceptors/src/policies.ts`).
+- **Production handler scripts** embed a self-contained subset via `handler-codegen.ts` (no regex literals; patterns compiled at runtime).
 
 **4 built-in listeners:**
 1. `ConsoleListener` — Color-coded terminal output
@@ -37,24 +35,28 @@ A new package that hooks into AI agent frameworks at runtime and emits normalize
 3. `CallbackListener` — Custom function for integrations
 4. `AlertListener` — Triggers on blocks/anomalies/error spikes
 
-**CLI commands:**
+**CLI commands (runtime):**
 - `sentinelflow intercept install [path]` — Install hooks
 - `sentinelflow intercept uninstall [path]` — Remove hooks
 - `sentinelflow intercept status [path]` — Check status and stats
 - `sentinelflow intercept tail [path]` — View recent events
+ - `sentinelflow events tail/blocked/stats [path]` — Query the unified event store
 
 ---
 
-## Phase 2.2 — Event Store & Queries (Next)
+## Phase 2.2 — Event Store & Queries ✅
 
-**Status:** Not started  
+**Status:** Complete (v0.3.x)  
 **Goal:** Persistent storage with time-windowed queries for events.
 
-Extend the existing `LocalRegistry` (SQLite) with an `events` table:
-- Store `AgentEvent` records with indexed timestamps
-- Time-windowed queries: "all tool calls from agent X in last 24h"
-- Aggregation: "total tokens consumed this week", "tools used per agent"
-- Export API for feeding dashboards and alerting systems
+Implemented in the runtime layer as dual-write:
+- Append-only JSONL log: `.sentinelflow/events.jsonl`
+- SQLite store: `.sentinelflow/events.db`
+
+CLI supports:
+- `sentinelflow events tail`
+- `sentinelflow events blocked`
+- `sentinelflow events stats`
 
 **Schema:**
 ```sql

@@ -13,6 +13,7 @@ coverage/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 .DS_Store
@@ -41,6 +42,9 @@ Thumbs.db
 .sentinelflow/events.jsonl
 .sentinelflow/events.jsonl.1
 .sentinelflow/handler.js
+.sentinelflow/cursor-handler.js
+.sentinelflow/copilot-handler.js
+.sentinelflow/codex-handler.js
 
 # SentinelFlow runtime data
 .sentinelflow/events.db
@@ -51,3 +55,6 @@ Thumbs.db
 .sentinelflow/handler.js
 .claude/settings.local.json
 results.sarif
+
+# Local handoff notes (keep content in docs/, not this file)
+FRIEND-TASKS.md
