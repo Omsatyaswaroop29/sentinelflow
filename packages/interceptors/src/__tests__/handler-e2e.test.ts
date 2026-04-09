@@ -406,6 +406,28 @@ describe("Claude Code Handler Script (E2E)", () => {
     expect(r2.stderr).toContain("rm -rf");
   });
 
+  it("blocks shell redirects and tee to sensitive paths (exit 2)", async () => {
+    const redirect = await runHandler(handlerPath, JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "echo hi > /etc/hosts" },
+      session_id: "test-session-write-001",
+      cwd: tmpDir,
+    }));
+    expect(redirect.exitCode).toBe(2);
+    expect(redirect.stderr).toContain("/etc");
+
+    const tee = await runHandler(handlerPath, JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "printf 'x' | tee -a ~/.ssh/authorized_keys" },
+      session_id: "test-session-write-002",
+      cwd: tmpDir,
+    }));
+    expect(tee.exitCode).toBe(2);
+    expect(tee.stderr).toContain("sensitive path");
+  });
+
   // ── Safety: npm publish → blocked ─────────────────────────
 
   it("blocks npm publish (exit 2)", async () => {

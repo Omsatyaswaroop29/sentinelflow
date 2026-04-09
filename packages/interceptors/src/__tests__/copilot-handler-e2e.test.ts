@@ -233,6 +233,28 @@ describe("Copilot Handler Script (E2E)", () => {
     expect(r2.stderr).toContain("rm -rf");
   });
 
+  it("blocks shell redirects and tee to sensitive paths (exit 2)", async () => {
+    const redirect = await runHandler(handlerPath, JSON.stringify({
+      timestamp: Date.now(),
+      cwd: tmpDir,
+      hookEventName: "PreToolUse",
+      toolName: "bash",
+      toolArgs: JSON.stringify({ command: "echo hi > /etc/hosts" }),
+    }));
+    expect(redirect.exitCode).toBe(2);
+    expect(redirect.stderr).toContain("/etc");
+
+    const tee = await runHandler(handlerPath, JSON.stringify({
+      timestamp: Date.now(),
+      cwd: tmpDir,
+      hookEventName: "PreToolUse",
+      toolName: "bash",
+      toolArgs: JSON.stringify({ command: "printf 'x' | tee -a ~/.ssh/authorized_keys" }),
+    }));
+    expect(tee.exitCode).toBe(2);
+    expect(tee.stderr).toContain("sensitive path");
+  });
+
   // ── preToolUse: blocklisted tool → block ──────────────────
 
   it("blocks a blocklisted tool", async () => {

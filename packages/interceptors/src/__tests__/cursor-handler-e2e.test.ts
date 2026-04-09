@@ -265,6 +265,32 @@ describe("Cursor Handler Script (E2E)", () => {
     expect(r2.parsed.userMessage).toContain("rm -rf");
   });
 
+  it("blocks shell redirects and tee to sensitive paths", async () => {
+    const redirect = await runHandler(handlerPath, JSON.stringify({
+      hook_event_name: "beforeShellExecution",
+      conversation_id: "test-conv-write-001",
+      generation_id: "test-gen-write-001",
+      command: "echo hi > /etc/hosts",
+      cwd: tmpDir,
+      workspace_roots: [tmpDir],
+    }));
+    expect(redirect.exitCode).toBe(0);
+    expect(redirect.parsed.permission).toBe("deny");
+    expect(redirect.parsed.userMessage).toContain("/etc");
+
+    const tee = await runHandler(handlerPath, JSON.stringify({
+      hook_event_name: "beforeShellExecution",
+      conversation_id: "test-conv-write-002",
+      generation_id: "test-gen-write-002",
+      command: "printf 'x' | tee -a ~/.ssh/authorized_keys",
+      cwd: tmpDir,
+      workspace_roots: [tmpDir],
+    }));
+    expect(tee.exitCode).toBe(0);
+    expect(tee.parsed.permission).toBe("deny");
+    expect(tee.parsed.userMessage).toContain("sensitive path");
+  });
+
   // ── beforeShellExecution: npm publish → deny ──────────────
 
   it("blocks npm publish", async () => {
