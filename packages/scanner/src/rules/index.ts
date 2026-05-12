@@ -1,7 +1,7 @@
 /**
  * SentinelFlow Enterprise Rule Registry
  *
- * 41 governance rules · 10 categories · 7 compliance frameworks
+ * 46 governance rules · 10 categories · 7 compliance frameworks
  *
  * Categories:
  *   1. Prompt Injection & Input Validation  (PI-*)
