@@ -150,6 +150,13 @@ export {
   type IdentityConfig,
 } from "./identity";
 
+// --- Hierarchical Escalation ---
+export {
+  HierarchicalEscalationPolicy,
+  type HierarchicalEscalationPolicyConfig,
+  type EscalationRecord,
+} from "./escalation";
+
 // --- Compliance Mappings ---
 export {
   RUNTIME_COMPLIANCE_MAPPINGS,

@@ -227,6 +227,11 @@ export class PathClassifier {
  *   - "internal" paths (configs, CI) require explicit agent clearance
  *   - "restricted" paths (secrets, credentials) are blocked by default
  *   - "system" paths (/etc, /dev) are always blocked
+ *
+ * COUPLING: When identity carries BOTH `authorized_scope` and `supervisor`,
+ * this policy short-circuits to allow so that HierarchicalEscalationPolicy's
+ * "escalate" decision can survive the base interceptor's precedence ladder
+ * (block > escalate). Register HierarchicalEscalationPolicy BEFORE this one.
  */
 export class EnhancedDataBoundaryPolicy implements PolicyProvider {
   readonly name = "enhanced_data_boundary";
@@ -275,6 +280,13 @@ export class EnhancedDataBoundaryPolicy implements PolicyProvider {
 
   evaluate(event: AgentEvent): PolicyEvaluationResult {
     const start = Date.now();
+
+    // Coupling guard — HierarchicalEscalationPolicy owns this event when
+    // both authorized_scope and supervisor are present. Allow here so the
+    // escalate decision is not shadowed by a parallel block on the same path.
+    if (event.identity?.authorized_scope && event.identity?.supervisor?.id) {
+      return { decision: "allow", matched_policies: [], evaluation_ms: Date.now() - start };
+    }
 
     // Extract all paths from the event
     const paths = extractPaths(event);

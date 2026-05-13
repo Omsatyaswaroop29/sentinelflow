@@ -20,7 +20,20 @@ import type {
   EventListener,
   PolicyProvider,
   PolicyEvaluationResult,
+  PolicyDecision,
 } from "./interface";
+
+type ActionTaken = NonNullable<AgentEvent["governance"]>["action_taken"];
+
+function decisionToActionTaken(decision: PolicyDecision): ActionTaken {
+  switch (decision) {
+    case "block":    return "blocked";
+    case "escalate": return "escalated";
+    case "flag":     return "flagged";
+    case "log":      return "logged";
+    case "allow":    return "allowed";
+  }
+}
 
 export abstract class BaseInterceptor implements Interceptor {
   abstract readonly framework: string;
@@ -170,7 +183,10 @@ export abstract class BaseInterceptor implements Interceptor {
 
   /**
    * Run all policy providers against a tool_call_start event.
-   * Returns the most restrictive decision (block > flag > log > allow).
+   * Returns the most restrictive decision: block > escalate > flag > log > allow.
+   *
+   * "escalate" ranks just below "block" because both stop execution, but
+   * "escalate" carries supervisor metadata and is auditable separately.
    *
    * This is THE critical path for the runtime agent firewall:
    * every tool call passes through here before execution.
@@ -186,7 +202,7 @@ export abstract class BaseInterceptor implements Interceptor {
 
     const start = Date.now();
     const allMatched: string[] = [];
-    let finalDecision: "allow" | "block" | "flag" | "log" = "allow";
+    let finalDecision: "allow" | "block" | "escalate" | "flag" | "log" = "allow";
     let blockReason: string | undefined;
 
     for (const policy of this._policies) {
@@ -198,12 +214,22 @@ export abstract class BaseInterceptor implements Interceptor {
           allMatched.push(...result.matched_policies);
         }
 
-        // Escalate decision: block > flag > log > allow
+        // Escalate decision: block > escalate > flag > log > allow
         if (result.decision === "block" && finalDecision !== "block") {
           finalDecision = "block";
           blockReason = result.reason;
           this._policyBlocks++;
-        } else if (result.decision === "flag" && finalDecision === "allow") {
+        } else if (
+          result.decision === "escalate" &&
+          finalDecision !== "block" &&
+          finalDecision !== "escalate"
+        ) {
+          finalDecision = "escalate";
+          blockReason = result.reason;
+        } else if (
+          result.decision === "flag" &&
+          (finalDecision === "allow" || finalDecision === "log")
+        ) {
           finalDecision = "flag";
         } else if (result.decision === "log" && finalDecision === "allow") {
           finalDecision = "log";
@@ -222,7 +248,13 @@ export abstract class BaseInterceptor implements Interceptor {
     const evaluationMs = Date.now() - start;
     this._policyTotalMs += evaluationMs;
 
-    // In monitor mode, downgrade "block" to "flag" — never actually block
+    // Monitor-mode downgrade applies to "block" only — "escalate" is exempt.
+    // Why: the supervisor record (escalations.jsonl) IS the audit signal;
+    // collapsing it to "flag" here would silently destroy it. Consequence:
+    // unlike "block", an "escalate" decision DOES halt the tool call even in
+    // monitor mode (see the rejection branches in handleToolCall). That's by
+    // design — pending-approval is a distinct workflow state, not a block we
+    // can safely pass through with a flag in its place.
     if (this._config.enforcement_mode === "monitor" && finalDecision === "block") {
       this.log("warn", `Would block tool call (monitor mode): ${blockReason}`);
       finalDecision = "flag";
@@ -294,14 +326,22 @@ export abstract class BaseInterceptor implements Interceptor {
             .map((p) => p.name)
             .filter((n) => !policyResult.matched_policies.includes(n)),
       policies_failed: policyResult.matched_policies,
-      action_taken: policyResult.decision === "block" ? "blocked" : "allowed",
+      action_taken: decisionToActionTaken(policyResult.decision),
       reason: policyResult.reason,
     };
 
-    // 4. If blocked, emit a blocked event and return false
+    // 4. If blocked or escalated, prevent execution. Both stop the tool call;
+    //    they differ in the audit story (escalation carries a supervisor
+    //    record and is recoverable via approval, block is a hard deny).
     if (policyResult.decision === "block") {
       event.type = "tool_call_blocked";
       event.tool!.status = "blocked";
+      await this.emitEvent(event);
+      return { allowed: false, event };
+    }
+    if (policyResult.decision === "escalate") {
+      event.type = "tool_call_escalated";
+      event.tool!.status = "escalated";
       await this.emitEvent(event);
       return { allowed: false, event };
     }

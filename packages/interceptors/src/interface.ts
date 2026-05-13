@@ -20,7 +20,21 @@ import type { AgentEvent } from "@sentinelflow/core";
 
 // ─── Policy Decision ────────────────────────────────────────────────
 
-export type PolicyDecision = "allow" | "block" | "flag" | "log";
+/**
+ * Policy decision space.
+ *
+ *   - "allow"    — proceed with the tool call
+ *   - "block"    — deny the tool call outright (policy violation)
+ *   - "escalate" — pause the tool call pending supervisor approval.
+ *                  Distinct from "block": the action is not denied, it is
+ *                  awaiting authorization. An escalation record is written
+ *                  to a separate audit sink (e.g. .sentinelflow/escalations.jsonl)
+ *                  with a supervisor reference. The interceptor prevents
+ *                  execution while the request is pending.
+ *   - "flag"     — proceed but mark the event for review
+ *   - "log"      — proceed and record an informational note
+ */
+export type PolicyDecision = "allow" | "block" | "escalate" | "flag" | "log";
 
 export interface PolicyEvaluationResult {
   decision: PolicyDecision;

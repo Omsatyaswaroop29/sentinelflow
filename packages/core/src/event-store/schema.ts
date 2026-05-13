@@ -63,6 +63,7 @@ export type GovernanceEventType =
 export type EventOutcome =
   | "allowed"     // Action proceeded normally
   | "blocked"     // Action was prevented by policy
+  | "escalated"   // Action paused pending supervisor approval (see escalations.jsonl)
   | "flagged"     // Action proceeded but was flagged for review
   | "error"       // Action failed due to an error
   | "info";       // Informational event, no action taken
