@@ -1,38 +1,71 @@
-# Source files (dist/ is what ships)
+# ═══════════════════════════════════════════════════════════════
+# SentinelFlow .npmignore
+#
+# DESIGN: The CLI package.json uses "files": ["dist/bundle.js", "README.md", "LICENSE"]
+# which is the primary defense. This .npmignore is the BACKUP safety net.
+#
+# Lesson learned from the claude-code v2.1.88 incident (March 2026):
+# A missing .npmignore entry for *.map shipped 57MB of source maps
+# to npm, exposing 512K lines of proprietary source code.
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Source maps (the claude-code incident prevention) ───────────
+*.map
+*.js.map
+*.css.map
+
+# ─── Source files (dist/ is what ships) ──────────────────────────
 src/
 *.ts
 !*.d.ts
 tsconfig.json
 tsconfig.base.json
 
-# Tests
+# ─── Tests ───────────────────────────────────────────────────────
 __tests__/
 *.test.ts
 *.test.js
 *.spec.ts
+*.spec.js
 vitest.config.*
+coverage/
+.vitest/
 
-# Dev tooling
+# ─── Dev tooling ─────────────────────────────────────────────────
 .turbo/
 turbo.json
 .github/
 .claude/
+.cursor/
 scripts/
+.sentinelflow/
+
+# ─── Monorepo internals (must not leak to published package) ────
 pnpm-workspace.yaml
 pnpm-lock.yaml
+packages/
+node_modules/
 
-# Docs (available on GitHub, not needed in npm package)
+# ─── Docs (available on GitHub, not needed in npm package) ──────
 docs/
 examples/
+tests/
 AGENTS.md
 CLAUDE.md
+FRIEND-TASKS.md
 llms.txt
 install.sh
 
-# Editor and OS files
+# ─── Editor and OS files ────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
+.env
+.env.*
+
+# ─── SentinelFlow runtime artifacts ─────────────────────────────
+.sentinelflow-policy.example.yaml
+results.sarif

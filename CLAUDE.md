@@ -48,4 +48,36 @@ Run tests with `pnpm test` (uses Vitest). Target 80%+ coverage. Every scanner ru
 
 ## Build
 
-`pnpm build` compiles all packages via Turborepo. Build order respects package dependencies: core → parsers → scanner → cli.
+`pnpm build` compiles all packages via Turborepo. Build order respects package dependencies: core → parsers → scanner → interceptors → cli.
+
+---
+
+## Package Manager Strategy
+
+SentinelFlow uses a **dual-mode architecture**: pnpm internally for development, package-manager-agnostic externally for distribution.
+
+**For contributors (internal):** The monorepo requires pnpm. The root `package.json` declares `packageManager: pnpm@9.15.0`, `.npmrc` has `engine-strict=true`, and Turborepo orchestrates builds. Always use `pnpm install`, `pnpm build`, `pnpm test`.
+
+**For users (published npm package):** The CLI is bundled with esbuild into a single ~600KB JavaScript file with ZERO runtime dependencies. `npx sentinelflow scan .` works identically with npm, yarn, pnpm, or bun. The only optional dependency is `better-sqlite3` (native C++ addon for SQLite event storage), which degrades gracefully to JSONL-only if unavailable.
+
+**Why this matters:** Meta uses Yarn, OpenAI uses a mix of Yarn and pnpm, Anthropic uses Yarn, Apple uses npm. A governance tool that requires pnpm would face adoption barriers at every one of these organizations. The single-file bundle eliminates all package resolution issues.
+
+**Critical rules for the published package:**
+- The `packages/cli/package.json` must NEVER contain `packageManager`, `pnpm` overrides, or `workspace:*` in any non-dev field
+- The `files` field must be an explicit allowlist: `["dist/bundle.js", "README.md", "LICENSE"]`
+- `better-sqlite3` must be `optionalDependencies`, not `dependencies`
+- All other packages (commander, yaml, toml, etc.) must be bundled by esbuild, not listed as runtime deps
+- Run `node scripts/prepublish-check.js` before every `npm publish`
+
+---
+
+## Publishing Playbook
+
+1. Build: `pnpm build`
+2. Test: `pnpm test` (all unit tests)
+3. Golden paths: `bash scripts/golden-path-test.sh` (repeat for cursor, copilot, codex)
+4. Pre-publish check: `node scripts/prepublish-check.js`
+5. Pack and inspect: `cd packages/cli && npm pack && tar -tzf sentinelflow-*.tgz`
+6. Test the packed tarball: `npx ./sentinelflow-*.tgz --help`
+7. Publish: `npm publish --access public`
+8. Verify: `npx sentinelflow@latest --version`

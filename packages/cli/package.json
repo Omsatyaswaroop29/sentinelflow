@@ -1,9 +1,9 @@
 {
   "name": "sentinelflow",
   "version": "0.3.1",
-  "description": "AI agent governance platform — static scanning + runtime interception for Claude Code, Cursor, GitHub Copilot, Codex, LangChain, CrewAI, and Kiro. Blocks dangerous tool calls in real-time.",
+  "description": "AI agent governance platform — static scanning + runtime interception for Claude Code, Cursor, GitHub Copilot, Codex CLI, LangChain, CrewAI, and Kiro. Blocks dangerous tool calls in real-time.",
+  "type": "commonjs",
   "main": "dist/bundle.js",
-  "types": "dist/index.d.ts",
   "bin": {
     "sentinelflow": "dist/bundle.js"
   },
@@ -17,7 +17,14 @@
   "bugs": {
     "url": "https://github.com/Omsatyaswaroop29/sentinelflow/issues"
   },
-  "files": ["dist"],
+  "files": [
+    "dist/bundle.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "keywords": [
     "ai",
     "ai-agents",
@@ -50,10 +57,10 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "node ../../scripts/prepublish-check.js"
   },
-  "dependencies": {
-    "commander": "^13.0.0",
+  "optionalDependencies": {
     "better-sqlite3": "^11.8.0"
   },
   "devDependencies": {
@@ -61,6 +68,7 @@
     "@sentinelflow/interceptors": "workspace:*",
     "@sentinelflow/parsers": "workspace:*",
     "@sentinelflow/scanner": "workspace:*",
+    "commander": "^13.0.0",
     "vitest": "^2.1.0",
     "typescript": "^5.7.0"
   }

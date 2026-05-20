@@ -151,11 +151,15 @@ describe("EventStoreWriter", () => {
 
 describe("EventStoreReader", () => {
   let tmpDir: string;
+  let today: string; // dynamic date for time-independent tests
 
   // Seed the database with a realistic set of events before each test
   beforeEach(() => {
     tmpDir = createTempDir();
+    today = new Date().toISOString().slice(0, 10);
     const writer = new EventStoreWriter({ projectDir: tmpDir, flushSize: 100 });
+
+    // Use today's date so time-windowed queries always find these events
 
     // 10 allowed tool calls
     for (let i = 0; i < 10; i++) {
@@ -167,7 +171,7 @@ describe("EventStoreReader", () => {
           cost_usd: 0.01,
           prompt_tokens: 100,
           completion_tokens: 50,
-          timestamp: `2026-04-01T10:${String(i).padStart(2, "0")}:00.000Z`,
+          timestamp: `${today}T10:${String(i).padStart(2, "0")}:00.000Z`,
         })
       );
     }
@@ -182,7 +186,7 @@ describe("EventStoreReader", () => {
           tool_name: "Bash",
           action: "rm -rf /",
           policy_id: "AC-005",
-          timestamp: `2026-04-01T11:${String(i).padStart(2, "0")}:00.000Z`,
+          timestamp: `${today}T11:${String(i).padStart(2, "0")}:00.000Z`,
         })
       );
     }
@@ -194,7 +198,7 @@ describe("EventStoreReader", () => {
           event_type: "tool_call_failed",
           outcome: "error",
           tool_name: "Write",
-          timestamp: `2026-04-01T12:${String(i).padStart(2, "0")}:00.000Z`,
+          timestamp: `${today}T12:${String(i).padStart(2, "0")}:00.000Z`,
         })
       );
     }
@@ -204,7 +208,7 @@ describe("EventStoreReader", () => {
       makeEvent({
         event_type: "session_started",
         outcome: "info",
-        timestamp: "2026-04-01T09:00:00.000Z",
+        timestamp: `${today}T09:00:00.000Z`,
       })
     );
 
@@ -216,12 +220,12 @@ describe("EventStoreReader", () => {
         outcome: "allowed",
         tool_name: "Read",
         cost_usd: 0.05,
-        timestamp: "2026-04-01T10:00:00.000Z",
+        timestamp: `${today}T10:00:00.000Z`,
       })
     );
 
     writer.flush();
-    writer.computeRollup("2026-04-01");
+    writer.computeRollup(today);
     writer.close();
   });
 
@@ -249,8 +253,8 @@ describe("EventStoreReader", () => {
     const reader = new EventStoreReader({ projectDir: tmpDir });
     const events = reader.getEvents({
       time_range: {
-        since: "2026-04-01T11:00:00.000Z",
-        until: "2026-04-01T11:59:59.999Z",
+        since: `${today}T11:00:00.000Z`,
+        until: `${today}T11:59:59.999Z`,
       },
     });
     expect(events).toHaveLength(3); // The 3 blocked events
@@ -266,7 +270,7 @@ describe("EventStoreReader", () => {
 
   it("getBlockedToolCalls returns only blocked events", () => {
     const reader = new EventStoreReader({ projectDir: tmpDir });
-    const blocked = reader.getBlockedToolCalls("2026-04-01");
+    const blocked = reader.getBlockedToolCalls(today);
     expect(blocked).toHaveLength(3);
     expect(blocked[0]!.policy_id).toBe("AC-005");
     reader.close();
@@ -274,7 +278,7 @@ describe("EventStoreReader", () => {
 
   it("getTokenSpendByAgent reads from rollups", () => {
     const reader = new EventStoreReader({ projectDir: tmpDir });
-    const costs = reader.getTokenSpendByAgent({ since: "2026-04-01" });
+    const costs = reader.getTokenSpendByAgent({ since: today });
     expect(costs).toHaveLength(2); // test-agent and agent-2
 
     const testAgent = costs.find((c) => c.agent_id === "test-agent");
@@ -287,7 +291,7 @@ describe("EventStoreReader", () => {
   it("getToolUsageSummary shows breakdown by tool", () => {
     const reader = new EventStoreReader({ projectDir: tmpDir });
     const tools = reader.getToolUsageSummary("test-agent", {
-      since: "2026-04-01",
+      since: today,
     });
 
     expect(tools.length).toBeGreaterThan(0);
@@ -301,9 +305,9 @@ describe("EventStoreReader", () => {
 
   it("getCostTimeline reads from daily rollups", () => {
     const reader = new EventStoreReader({ projectDir: tmpDir });
-    const timeline = reader.getCostTimeline({ since: "2026-04-01" });
+    const timeline = reader.getCostTimeline({ since: today });
     expect(timeline.length).toBeGreaterThan(0);
-    expect(timeline[0]!.date).toBe("2026-04-01");
+    expect(timeline[0]!.date).toBe(today);
     reader.close();
   });
 
