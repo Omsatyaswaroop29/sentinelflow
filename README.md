@@ -18,7 +18,7 @@ npx sentinelflow intercept install . --framework copilot --mode enforce
 ```
 
 ```
-  SentinelFlow v0.3.1 — Agent Governance Scanner
+  SentinelFlow v0.4.0 — Agent Governance Scanner
 
   Frameworks detected:
     ✓ Claude Code
@@ -69,12 +69,16 @@ SentinelFlow fills that gap. It reads your agent configurations, identifies misc
 ## Installation
 
 ```bash
-npm install -g sentinelflow
-# or use directly without installing:
+# Use directly without installing (works with any package manager):
 npx sentinelflow scan .
+
+# Or install globally:
+npm install -g sentinelflow
+yarn global add sentinelflow
+pnpm add -g sentinelflow
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 18.
 
 ## Quickstart
 
@@ -368,9 +372,11 @@ SentinelFlow was developed using Claude Code as the primary engineering partner 
 |---|---|---|
 | **Rule Author** | Opus | Authors governance rules with detection logic, test annotations, compliance mappings, and auto-fix suggestions |
 | **Parser Engineer** | Opus | Builds and maintains framework-specific config parsers that normalize agent definitions into the SentinelFlow schema |
+| **Handler Engineer** | Opus | Builds framework interceptors, handler scripts, and the shared code generator that bakes enterprise policies into every handler |
+| **Policy Architect** | Opus | Designs runtime policies, detection patterns, and the central pattern registry that flows to all handlers |
 | **Compliance Mapper** | Sonnet | Maps rules to OWASP LLM 2025, EU AI Act, NIST AI RMF, MITRE ATLAS, ISO 42001, SOC 2, HIPAA, and GDPR |
 | **Red-Team Adversary** | Opus | Attempts to evade rules using obfuscation, encoding, structural tricks, and framework-specific hiding techniques |
-| **Corpus QA** | Sonnet | Validates parsers and rules against the curated test corpus; guards against regressions and false positives |
+| **Corpus QA** | Sonnet | Validates parsers, rules, and handlers against test suites and golden path scripts; guards against regressions |
 
 Every new governance rule goes through a six-step closed loop: parser engineer → rule author → compliance mapper (parallel) → red-team adversary (parallel) → corpus QA → human architect ship/no-ship decision. Rules graduate from `experimental` (monitor-only, requires 3+ flagged and 3+ safe test cases plus 3+ Red-Team evasion attempts) to `stable` (<20% false positive rate, runs in CI standard preset) to `enforced` (<10% false positive rate, runs in strict preset). The tooling that governs AI agents is itself the product of a multi-agent governed-development workflow.
 

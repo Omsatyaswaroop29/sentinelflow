@@ -1,59 +1,82 @@
 # SentinelFlow Agent Architecture
 
-This file is the **source-of-truth summary** for SentinelFlow's development agents. Each agent is defined as an executable `.claude/agents/<name>.md` file with a fixed system prompt, structured inputs/outputs, and a quality checklist. Engineers should edit the individual agent files; this document only summarizes them.
+This file is the **source-of-truth summary** for SentinelFlow's development agents. Each agent is defined as an executable `.claude/agents/<name>.md` file. Engineers edit the individual agent files; this document defines roles, workflows, and artifact contracts. The human **SentinelFlow Architect** orchestrates agents, reviews artifacts, and makes ship/no-ship decisions.
 
----
+## Canonical agent roles
 
-## Canonical Roles
+| Agent | File | Domain | Purpose |
+|-------|------|--------|---------|
+| Rule Author | `.claude/agents/rule-author.md` | Static | Implement static governance rules with tests, compliance mappings, remediation |
+| Parser Engineer | `.claude/agents/parser-engineer.md` | Static | Build framework parsers that normalize configs into the core schema |
+| Handler Engineer | `.claude/agents/handler-engineer.md` | Runtime | Build framework interceptors, handler scripts, and the code generator |
+| Policy Architect | `.claude/agents/policy-architect.md` | Runtime | Design runtime policies, detection patterns, and the central pattern registry |
+| Compliance Mapper | `.claude/agents/compliance-mapper.md` | Both | Map rules and controls to OWASP LLM, EU AI Act, NIST, MITRE ATLAS, ISO 42001, SOC 2 |
+| Red-Team Adversary | `.claude/agents/red-team.md` | Both | Evade rules and handlers via obfuscation, encoding, multi-step chains |
+| Corpus QA | `.claude/agents/corpus-qa.md` | Both | Validate against test suites and golden path scripts; guard regressions |
 
-| Agent | File | Model | Purpose |
-|-------|------|-------|---------|
-| Rule Author | `.claude/agents/rule-author.md` | opus | Authors governance rules with detection logic, test annotations, compliance mappings, and auto-fix suggestions |
-| Parser Engineer | `.claude/agents/parser-engineer.md` | opus | Builds and maintains framework-specific config parsers that normalize agent definitions into the SentinelFlow schema |
-| Compliance Mapper | `.claude/agents/compliance-mapper.md` | sonnet | Maps rules and findings to OWASP LLM 2025, EU AI Act, NIST AI RMF, MITRE ATLAS, ISO 42001, SOC 2, HIPAA, GDPR |
-| Red-Team Adversary | `.claude/agents/red-team.md` | opus | Attempts to evade rules using obfuscation, encoding, structural tricks, and framework-specific hiding techniques |
-| Corpus QA | `.claude/agents/corpus-qa.md` | sonnet | Validates parsers and rules against the curated test corpus; guards against regressions and false positives |
+## Global rules for all agents
 
-The **SentinelFlow Architect** (you, the human) is the top-level orchestrator — not an agent file. You invoke agents, review their artifacts, and make ship/no-ship decisions.
+1. Follow `CLAUDE.md` constraints. Never mutate schemas without explicit request.
+2. Outputs must be structured and machine-checkable.
+3. Be honest about uncertainty. Label assumptions.
+4. Never introduce secrets into code or tests.
+5. Stay within your role. Recommend other agents for cross-cutting work.
+6. For runtime changes, golden path scripts must pass alongside `pnpm test`.
+7. Never use regex literals in generated handler code — use `JSON.stringify()` + `new RegExp()`.
+8. Remember Cursor blocks via stdout JSON, not exit codes.
 
----
+## Workflow A: New scanner rule
 
-## Core Workflow: New Rule Development
+Step 0: Architect defines rule intent, target frameworks, severity.
+Step 1: Parser Engineer adds config parsing if needed (≥5 fixtures).
+Step 2: Rule Author implements pure function, tests (≥3 flagged, ≥3 safe, ≥1 edge).
+Step 3: Compliance Mapper validates mappings (parallel with 4).
+Step 4: Red-Team attempts ≥5 evasion techniques (parallel with 3).
+Step 5: Corpus QA runs full suite, regression report, go/no-go.
+Step 6: Architect ships as stable, experimental, or sends back.
 
-**Step 1 → Parser Engineer** (if the rule requires new config parsing). Proposes changes to `@sentinelflow/parsers` so the scanner can read the config fields the new rule needs. Output: parser diff, 5+ test fixtures from real repos, capability manifest update.
+## Workflow B: Runtime interceptor or handler update
 
-**Step 2 → Rule Author.** Writes the rule implementation in `@sentinelflow/scanner/rules/`. Output: rule TypeScript file with detection logic, test file with `# flagged:` and `# safe:` annotations, compliance mappings, auto-fix suggestion, and CLI remediation text.
+Step 0: Architect defines framework, hooks contract, blocking mechanism.
+Step 1: Handler Engineer implements using `generatePolicyEvaluationCode()`, correct blocking, CLI, golden path (≥10 tests), E2E vitest (≥10 tests).
+Step 2: Policy Architect adds patterns to `patterns.ts` if needed, with tests.
+Step 3: Red-Team tests bypass (obfuscation, multi-step, framework evasion).
+Step 4: Corpus QA runs all tests + golden paths. Zero regressions.
+Step 5: Architect decision.
 
-**Step 3 → Compliance Mapper** (parallel with Step 4). Verifies and enriches the rule's compliance mappings. Output: validated mapping table with specific article/control references and justifications.
+## Workflow C: New detection pattern (fast path)
 
-**Step 4 → Red-Team Adversary** (parallel with Step 3). Attempts to evade the rule using 5+ techniques. Output: evasion report with configs that should-have-been-caught (gaps) and configs correctly ignored (FP checks).
+1. Policy Architect adds pattern to `patterns.ts` with ID and test.
+2. Red-Team verifies catch + no false-positive.
+3. Corpus QA runs all tests + golden paths.
+4. Architect approves.
 
-**Step 5 → Corpus QA.** Runs the full test suite including any new fixtures from Red-Team. Output: regression report showing new passes/fails, false positive delta, and SARIF sample.
+## Artifact contracts
 
-**Step 6 → Architect Decision.** Review artifacts from steps 2–5. Decide: ship as `stable`, ship as `experimental`, or send back for another loop.
+**Parser Engineer** — diff summary, fixtures (≥5), capability manifest, backward-compat.
+**Rule Author** — metadata, implementation, tests (≥3/≥3/≥1), compliance, remediation, limitations.
+**Handler Engineer** — interceptor using handler-codegen, hooks docs, CLI, golden path (≥10), E2E (≥10).
+**Policy Architect** — patterns (ID, regex, severity, tags), tests, compliance, codegen verification.
+**Compliance Mapper** — mapping table, CWE/CVE, impact summary, open questions.
+**Red-Team** — ≥5 evasion configs (labeled), gap analysis, FP analysis, recommendations.
+**Corpus QA** — test results, golden paths, regression report, FP delta, SARIF snippet, go/no-go.
 
----
+## Rule graduation model
 
-## Artifact Contracts
+**experimental** — Monitor-only. ≥3 flagged + ≥3 safe tests. Red-Team ≥3 evasion attempts.
+**stable** — <20% FP rate. Standard preset. Corpus QA sign-off + compliance mapping.
+**enforced** — <10% FP rate. Strict preset. Architect approval. No critical gaps.
+**deprecated** — Superseded. Functional but unmaintained. Has `superseded_by`.
 
-**Parser Engineer →** parser diff, test fixture list (≥5 real-world patterns with source URLs), capability manifest (file patterns, versions, edge cases), backward-compat statement.
+## Handler graduation model
 
-**Rule Author →** rule `.ts` file, test `.test.ts` file with flagged/safe annotations, severity + compliance mapping table, auto-fix config, known false positive list, CLI remediation text.
+**draft** — Skeleton, not wired to handler-codegen.
+**integrated** — Uses `generatePolicyEvaluationCode()`. Golden paths pass.
+**validated** — Tested against real session.
+**stable** — External users, no crash reports.
 
-**Compliance Mapper →** mapping validation table (framework → reference → justification), new CWE/CVE references if any, one-paragraph compliance impact summary.
+Current: Claude Code (validated), Cursor (integrated), Copilot (integrated), Codex CLI (integrated).
 
-**Red-Team Adversary →** 5+ evasion configs per rule, gap analysis (what was missed), false-positive analysis (what was incorrectly flagged), recommendations for rule hardening.
+## Architect operating model
 
-**Corpus QA →** corpus manifest update, regression report (new passes/fails by rule ID), false positive delta, SARIF snippet, go/no-go recommendation.
-
----
-
-## Rule Graduation Model
-
-`experimental` → New rule. Monitor-only mode. No CI failures. Requires ≥3 flagged and ≥3 safe test annotations. Red-Team must produce ≥3 evasion attempts.
-
-`stable` → Demonstrated <20% FP rate across corpus. Runs in standard preset (CI fails on critical/high). Requires Corpus QA sign-off.
-
-`enforced` → Demonstrated <10% FP rate. Runs in strict preset. Requires Architect approval.
-
-`deprecated` → Superseded. Remains functional but receives no maintenance. `superseded_by` field points to replacement.
+The human Architect sets priorities, drafts intents, decides ship/no-ship, maintains CLAUDE.md and agents.md. Treat `.claude/agents/*.md` and this file as the control plane.
