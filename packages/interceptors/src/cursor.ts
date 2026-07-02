@@ -65,6 +65,11 @@ import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
 import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
+  DataBoundaryCodegenConfig,
+  IdentityCodegenConfig,
+  SequenceDetectionCodegenConfig,
+} from "./handler-codegen";
+import type {
   InterceptorConfig,
   PolicyProvider,
   EventListener,
@@ -171,6 +176,12 @@ export interface CursorInterceptorConfig extends Partial<InterceptorConfig> {
   maxInputSummaryLength?: number;
   /** Escalation mode: "deny" blocks outright, "ask" escalates to user */
   escalationMode?: "deny" | "ask";
+  /** Data boundary classification config (public/internal/restricted/system). Enabled+monitor by default. */
+  dataBoundary?: DataBoundaryCodegenConfig;
+  /** Identity/RBAC + environment policy config. Enabled+monitor by default. */
+  identity?: IdentityCodegenConfig;
+  /** Multi-step attack sequence detection config. Enabled+monitor by default. */
+  sequenceDetection?: SequenceDetectionCodegenConfig;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -200,6 +211,9 @@ export class CursorInterceptor extends BaseInterceptor {
   private _maxInputLength: number;
   private _escalationMode: "deny" | "ask";
   private _originalHooksJson: string | null = null;
+  private _dataBoundary?: DataBoundaryCodegenConfig;
+  private _identity?: IdentityCodegenConfig;
+  private _sequenceDetection?: SequenceDetectionCodegenConfig;
 
   constructor(config: CursorInterceptorConfig) {
     super(config);
@@ -216,6 +230,9 @@ export class CursorInterceptor extends BaseInterceptor {
     this._readFileBlockPatterns = config.readFileBlockPatterns ?? [];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
     this._escalationMode = config.escalationMode ?? "deny";
+    this._dataBoundary = config.dataBoundary;
+    this._identity = config.identity;
+    this._sequenceDetection = config.sequenceDetection;
   }
 
   // ─── Static Helpers ─────────────────────────────────────────
@@ -379,7 +396,11 @@ export class CursorInterceptor extends BaseInterceptor {
    *   - Fail-open means: output `{ "permission": "allow" }` on any error
    */
   private generateHandlerScript(): string {
-    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode, {
+      dataBoundary: this._dataBoundary,
+      identity: this._identity,
+      sequenceDetection: this._sequenceDetection,
+    });
 
     return `#!/usr/bin/env node
 /**
@@ -589,12 +610,18 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── beforeShellExecution (CAN BLOCK) ───────────────
     case "beforeShellExecution": {
+      const agentId = "cursor-agent";
       const cmd = input.command || "";
       const inputSummary = cmd.slice(0, MAX_INPUT_LENGTH);
 
       // Cursor sends "command" as a direct field; evaluate as Bash input.
       // NOTE: Cursor blocks via stdout JSON, not exit codes.
-      const policy = evaluatePolicy("Bash", { command: cmd });
+      let policy = evaluatePolicy("Bash", { command: cmd }, agentId);
+      const seq = evaluateSequence(sessionId, "Bash", inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
       const isBlock = !!policy.block;
       const isFlag = !isBlock && !!policy.flag;
 
@@ -602,7 +629,7 @@ function denyResponse(userMsg, agentMsg) {
         const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
-          { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
+          { session_id: sessionId, agent_id: agentId, tool_name: "Shell", tool_input_summary: inputSummary,
             action: inputSummary, policy_id: policy.id || null, reason,
             payload: { hook: "beforeShellExecution", cwd: input.cwd, workspace_roots: input.workspace_roots } }
         ));
@@ -616,7 +643,7 @@ function denyResponse(userMsg, agentMsg) {
       // Allowed — log and proceed
       persistEvent(makeEvent(
         isFlag ? "tool_call_flagged" : "tool_call_attempted", "allowed", isFlag ? "medium" : "info",
-        { session_id: sessionId, tool_name: "Shell", tool_input_summary: inputSummary,
+        { session_id: sessionId, agent_id: agentId, tool_name: "Shell", tool_input_summary: inputSummary,
           action: inputSummary, policy_id: isFlag ? (policy.id || null) : null, reason: isFlag ? (policy.reason || null) : null,
           payload: { hook: "beforeShellExecution", cwd: input.cwd } }
       ));
@@ -626,6 +653,7 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── beforeMCPExecution (CAN BLOCK) ─────────────────
     case "beforeMCPExecution": {
+      const agentId = "cursor-agent";
       const toolName = input.tool_name || "unknown-mcp-tool";
       const serverName = input.server || input.command || "unknown-server";
       let toolInput = null;
@@ -637,7 +665,7 @@ function denyResponse(userMsg, agentMsg) {
         const reason = 'MCP server "' + serverName + '" is in the blocklist';
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+          { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
             action: inputSummary, policy_id: "mcp_server_blocklist", reason,
             payload: { hook: "beforeMCPExecution", server: serverName } }
         ));
@@ -653,7 +681,7 @@ function denyResponse(userMsg, agentMsg) {
         const reason = 'Tool "' + toolName + '" is in the blocklist';
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "medium",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+          { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
             action: inputSummary, policy_id: "tool_blocklist", reason,
             payload: { hook: "beforeMCPExecution", server: serverName } }
         ));
@@ -665,13 +693,18 @@ function denyResponse(userMsg, agentMsg) {
       }
 
       // Enterprise policy evaluation (secrets, sensitive paths, allowlist semantics, etc.)
-      const policy = evaluatePolicy(toolName, toolInput);
+      let policy = evaluatePolicy(toolName, toolInput, agentId);
+      const seq = evaluateSequence(sessionId, toolName, inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
       const isFlag = policy && !policy.block && policy.flag;
       if (policy && policy.block) {
         const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
-          { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+          { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
             action: inputSummary, policy_id: policy.id || null, reason,
             payload: { hook: "beforeMCPExecution", server: serverName } }
         ));
@@ -685,7 +718,7 @@ function denyResponse(userMsg, agentMsg) {
       // Allowed
       persistEvent(makeEvent(
         isFlag ? "tool_call_flagged" : "tool_call_attempted", "allowed", isFlag ? "medium" : "info",
-        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+        { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
           action: inputSummary, policy_id: isFlag ? (policy.id || null) : null, reason: isFlag ? (policy.reason || null) : null,
           payload: { hook: "beforeMCPExecution", server: serverName } }
       ));
@@ -695,15 +728,17 @@ function denyResponse(userMsg, agentMsg) {
 
     // ─── beforeReadFile (CAN BLOCK) ─────────────────────
     case "beforeReadFile": {
+      const agentId = "cursor-agent";
       const filePath = input.file_path || "unknown";
+      const inputSummary = "file: " + filePath;
 
-      // Check file block patterns (.env, *.pem, *.key, etc.)
+      // Check file block patterns (.env, *.pem, *.key, etc.) — explicit user config
       if (ENFORCEMENT_MODE === "enforce" && checkReadFileBlocked(filePath)) {
         const reason = 'Reading "' + filePath + '" is blocked by file access policy';
         persistEvent(makeEvent(
           "tool_call_blocked", "blocked", "high",
-          { session_id: sessionId, tool_name: "ReadFile", tool_input_summary: "file: " + filePath,
-            action: "file: " + filePath, policy_id: "read_file_policy", reason,
+          { session_id: sessionId, agent_id: agentId, tool_name: "ReadFile", tool_input_summary: inputSummary,
+            action: inputSummary, policy_id: "read_file_policy", reason,
             payload: { hook: "beforeReadFile", file_path: filePath } }
         ));
         process.stdout.write(denyResponse(
@@ -713,11 +748,37 @@ function denyResponse(userMsg, agentMsg) {
         process.exit(0);
       }
 
+      // Data boundary classification + identity/RBAC + sequence detection.
+      // Reads are the primary vector data boundary is meant to catch, not just writes.
+      let policy = evaluatePolicy("Read", { file_path: filePath }, agentId);
+      const seq = evaluateSequence(sessionId, "Read", inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
+      const isBlock = !!policy.block;
+      const isFlag = !isBlock && !!policy.flag;
+
+      if (isBlock) {
+        const reason = policy.reason || ("Blocked by policy: " + (policy.id || "unknown"));
+        persistEvent(makeEvent(
+          "tool_call_blocked", "blocked", "high",
+          { session_id: sessionId, agent_id: agentId, tool_name: "ReadFile", tool_input_summary: inputSummary,
+            action: inputSummary, policy_id: policy.id || null, reason,
+            payload: { hook: "beforeReadFile", file_path: filePath } }
+        ));
+        process.stdout.write(denyResponse(
+          "SentinelFlow: " + reason,
+          "This file read was blocked by a SentinelFlow governance policy. " + reason
+        ));
+        process.exit(0);
+      }
+
       // Allowed
       persistEvent(makeEvent(
-        "tool_call_attempted", "allowed", "info",
-        { session_id: sessionId, tool_name: "ReadFile", tool_input_summary: "file: " + filePath,
-          action: "file: " + filePath,
+        isFlag ? "tool_call_flagged" : "tool_call_attempted", "allowed", isFlag ? "medium" : "info",
+        { session_id: sessionId, agent_id: agentId, tool_name: "ReadFile", tool_input_summary: inputSummary,
+          action: inputSummary, policy_id: isFlag ? (policy.id || null) : null, reason: isFlag ? (policy.reason || null) : null,
           payload: { hook: "beforeReadFile", file_path: filePath } }
       ));
       process.stdout.write(allowResponse());

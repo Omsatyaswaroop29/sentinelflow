@@ -16,4 +16,11 @@ export {
   type SuppressionResult,
   type PolicyFile,
   type ScanPreset,
+  type DataClassificationLevel,
+  type RuntimeAgentClearance,
+  type RuntimeClassificationRule,
+  type RuntimeDataBoundaryConfig,
+  type RuntimeIdentityConfig,
+  type RuntimeSequenceDetectionConfig,
+  type RuntimePoliciesConfig,
 } from "./suppression";

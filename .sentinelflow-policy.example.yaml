@@ -70,10 +70,71 @@ runtime_policies:
   #   - Bash
   #   - Write
 
-  # Maximum estimated cost (USD) per session before blocking.
-  # Set to 0 to disable cost budgeting.
+  # Maximum estimated cost (USD) per session. Recorded and queryable via
+  # `sentinelflow costs`, but NOT enforced in real time: as of this release,
+  # no supported framework (Claude Code, Cursor, Copilot, Codex) exposes
+  # token/cost data in hook payloads, so there is nothing to block on yet.
   # max_cost_per_session: 5.00
 
-  # Enforcement mode: "monitor" logs but never blocks; "enforce" blocks.
+  # Enforcement mode for the core policies (dangerous commands, secrets,
+  # sensitive file writes, network egress, tool allow/blocklist).
+  # "monitor" logs but never blocks; "enforce" blocks.
   # Start with monitor, graduate to enforce after reviewing event logs.
   enforcement_mode: monitor
+
+  # Outbound network domains (exact match or "*.wildcard.tld").
+  # egress_allowed_domains:
+  #   - "*.corp.internal"
+  # egress_blocked_domains:
+  #   - evil.example.com
+
+  # ─── Data Boundary Classification ────────────────────────────
+  # Classifies file paths by sensitivity (public/internal/restricted/system)
+  # and blocks/flags access above an agent's clearance level. This governs
+  # READS, not just writes — e.g. an agent cat-ing ~/.ssh/id_rsa gets caught
+  # here even though it's not writing anything.
+  #
+  # Enabled by default with its own "monitor" enforcement mode, independent
+  # of the core enforcement_mode above — new controls start observe-only so
+  # they can't surprise-block an existing "enforce" installation.
+  data_boundary:
+    enabled: true
+    enforcement_mode: monitor
+    default_max_classification: internal   # cap for agents with no explicit clearance
+    # agent_clearances:
+    #   - agent: "deploy-bot"
+    #     max_classification: restricted
+    # custom_rules:
+    #   - pattern: "config/secrets/"
+    #     classification: restricted
+    #     label: "Custom secrets directory"
+
+  # ─── Identity & Role-Based Access Control ────────────────────
+  # Attaches human-owner/team/role context to every event and enforces
+  # "low-privilege agents may not call high-privilege tools." Privilege
+  # levels: reader=2, writer=4, executor=6, deployer=8, admin=10.
+  identity:
+    enabled: true
+    enforcement_mode: monitor
+    # human_owner: "platform-team@example.com"
+    # team: platform
+    # environment: production   # development | staging | production | ci
+    # role: executor            # default identity for unlisted agents
+    # external_facing: false
+    # agent_roles:
+    #   reviewer-agent: reader
+    # agent_privileges:
+    #   custom-agent: 7
+
+  # ─── Sequence Detection ───────────────────────────────────────
+  # Correlates events within a session to catch multi-step attack chains
+  # that look benign in isolation (write script -> chmod +x -> execute;
+  # read secret -> curl out; repeated blocked attempts; privilege-file
+  # write -> reload). Reconstructed from the SQLite event store on every
+  # call, since each hook invocation is a fresh process with no memory of
+  # prior calls.
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+    window_minutes: 5
+    min_confidence: 0.7

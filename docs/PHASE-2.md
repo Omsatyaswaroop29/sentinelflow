@@ -41,6 +41,8 @@ A new package that hooks into AI agent frameworks at runtime and emits normalize
 - `sentinelflow intercept status [path]` — Check status and stats
 - `sentinelflow intercept tail [path]` — View recent events
  - `sentinelflow events tail/blocked/stats [path]` — Query the unified event store
+ - `sentinelflow costs [path]` — Token spend report from the event store
+ - `sentinelflow anomalies [path]` — Batch anomaly detection over event history (Phase 2.4)
 
 ---
 
@@ -79,56 +81,62 @@ CREATE INDEX idx_events_type ON events(type);
 
 ---
 
-## Phase 2.3 — Policy Engine (Runtime)
+## Phase 2.3 — Policy Engine (Runtime) ✅
 
-**Status:** Not started  
+**Status:** Complete  
 **Goal:** Declarative runtime policies in `.sentinelflow-policy.yaml`.
 
-Extend the policy file format with runtime rules:
+`intercept install` loads the `runtime_policies` section as defaults, with CLI flags taking precedence. The shipped schema (see `.sentinelflow-policy.example.yaml` for the full reference) differs from the early sketch that used to live in this doc — it exposes the actual classification/RBAC/sequence systems built in `packages/interceptors`, not a flat blocked-paths list:
+
 ```yaml
 runtime_policies:
-  enforcement_mode: monitor  # or enforce
-  
-  tool_allowlist:
-    - Read
-    - ListDir
-    - Grep
-    - Bash(npm test)
-    - Bash(npm run build)
-  
-  tool_blocklist:
-    - Bash(rm *)
-    - Write(/etc/*)
-  
-  cost_budget:
-    per_session_usd: 5.00
-    per_day_usd: 50.00
-  
-  data_boundaries:
-    blocked_paths:
-      - /etc/shadow
-      - /var/secrets/*
-      - ~/.ssh/*
-    blocked_patterns:
-      - "\\d{3}-\\d{2}-\\d{4}"  # SSN
-      - "\\d{16}"               # Credit card
+  blocked_tools: [NotebookEdit]
+  allowed_tools: []
+  max_cost_per_session: 5.00   # recorded, not enforced -- see honest limitation below
+  enforcement_mode: monitor
+  egress_allowed_domains: ["*.corp.internal"]
+  egress_blocked_domains: [evil.example.com]
+
+  data_boundary:
+    enabled: true
+    enforcement_mode: monitor   # independent of the core enforcement_mode above
+    default_max_classification: internal
+    agent_clearances:
+      - agent: "deploy-*"
+        max_classification: restricted
+
+  identity:
+    enabled: true
+    enforcement_mode: monitor
+    role: executor
+    agent_roles:
+      reviewer-agent: reader
+
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+    window_minutes: 5
+    min_confidence: 0.7
 ```
+
+Parsing lives in `packages/scanner/src/suppression.ts` (`loadPolicyFile`/`RuntimePoliciesConfig`, using the real `yaml` package — the original hand-rolled regex parser couldn't handle nested arrays/objects). Each advanced policy defaults to enabled + monitor mode, independent of the core subset's `enforcement_mode`, so enabling this feature never silently starts blocking things an existing "enforce" install didn't block before.
+
+**Honest limitation:** `max_cost_per_session` is recorded and queryable (`sentinelflow costs`) but not enforced in real time — no supported framework exposes token/cost data in hook payloads yet.
 
 ---
 
-## Phase 2.4 — Anomaly Detection
+## Phase 2.4 — Anomaly Detection ✅ (batch, not live post-processing)
 
-**Status:** Not started  
+**Status:** Complete, as an on-demand CLI command rather than an automatic post-processor  
 **Goal:** Pattern-based alerting on the event stream.
 
-Detectors:
+`sentinelflow anomalies [path] --since 7d` runs a batch pass over SQLite event history:
 - **Novel tool:** Agent calls a tool never seen in its baseline
-- **Cost spike:** Usage > 2σ from 7-day moving average
-- **Error rate:** > 5 errors in 5 minutes
-- **Privilege escalation:** Agent delegates to higher-privilege agent
-- **Unusual pattern:** Tool call sequence anomaly detection
+- **Cost spike:** Usage > 2σ from a rolling per-agent average
+- **Error rate:** Sustained failure rate over a sliding window
+- **Privilege escalation:** Included automatically once `identity.agent_roles`/`agent_privileges` are configured — without real per-agent data its built-in default would flag nearly every Bash/Write call, and real-time RBAC (Phase 2.3) already covers that concern with a better-calibrated default.
 
-Each detector runs as a post-processor on events in the store, annotating events with `anomaly` fields.
+This ships as a batch/on-demand command rather than "a post-processor on events in the store, annotating events with `anomaly` fields" as originally sketched here: cost-spike and error-rate detection need many events to build a baseline, which is a better fit for periodic analysis than synchronous per-event annotation. Sequence/pattern anomaly detection (the fifth original detector type) is handled separately and *is* live/per-call — see Phase 2.3's `sequence_detection` policy, which reconstructs session history from SQLite on every tool call rather than running as a batch job.
 
 ---
 

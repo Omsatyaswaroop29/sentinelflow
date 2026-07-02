@@ -16,6 +16,38 @@ echo ""
 TEST_DIR=$(mktemp -d /tmp/sf-claude-gp-XXXXXX)
 mkdir -p "$TEST_DIR/.claude"
 
+# Make better-sqlite3 resolvable from TEST_DIR so sequence detection (which
+# is SQLite-backed) actually runs instead of silently no-op'ing. A real
+# project has its own node_modules with the optional dependency installed;
+# a bare mktemp dir does not, so we bridge that gap for the golden path.
+REAL_SQLITE=$(node -e "console.log(require.resolve('better-sqlite3', { paths: [process.cwd()] }).split('/lib/')[0])" 2>/dev/null || true)
+if [ -n "$REAL_SQLITE" ] && [ -d "$REAL_SQLITE" ]; then
+  mkdir -p "$TEST_DIR/node_modules"
+  ln -sf "$REAL_SQLITE" "$TEST_DIR/node_modules/better-sqlite3"
+fi
+
+# Policy YAML enabling enforce mode for the advanced policies (data boundary,
+# identity/RBAC) so this golden path also covers the runtime-firewall
+# features beyond the core dangerous-command/secrets/egress subset.
+# Sequence detection stays at its monitor default -- it's meant to flag,
+# not block, until an operator explicitly graduates it.
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  identity:
+    enabled: true
+    enforcement_mode: enforce
+    role: executor
+    agent_roles:
+      readonly-reviewer: reader
+  data_boundary:
+    enabled: true
+    enforcement_mode: enforce
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+EOF
+
 # Install Claude Code hooks
 node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework claude-code --mode enforce --blocklist NotebookEdit --egress-block evil.com
 
@@ -134,6 +166,55 @@ run_test "PATH manipulation" \
 run_test "Safe npm test" \
   '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"},"session_id":"gp-001","cwd":"/tmp"}' \
   0 ""
+
+echo ""
+echo "  -- Advanced Policy Contract Tests (data boundary / RBAC) --"
+echo ""
+
+# Data boundary: reading a restricted path (SSH key) -> block (enforce mode)
+run_test "Data boundary: read ~/.ssh/id_rsa" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/home/user/.ssh/id_rsa"},"session_id":"gp-002","cwd":"/tmp"}' \
+  2 "Data boundary"
+
+# Data boundary: reading a restricted path via shell cat -> block (tilde path regression guard)
+run_test "Data boundary: cat ~/.ssh/id_rsa via shell" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat ~/.ssh/id_rsa"},"session_id":"gp-002","cwd":"/tmp"}' \
+  2 "Data boundary"
+
+# Data boundary: reading a normal source file -> allow
+run_test "Data boundary: read normal source file (allowed)" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/home/user/project/src/index.ts"},"session_id":"gp-002","cwd":"/tmp"}' \
+  0 ""
+
+# RBAC: reader-role agent tries Bash -> block (enforce mode)
+run_test "RBAC: reader-role agent blocked from Bash" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"},"session_id":"gp-003","cwd":"/tmp","agent_name":"readonly-reviewer"}' \
+  2 "RBAC"
+
+# RBAC: default (executor-role) agent can still use Bash -> allow
+run_test "RBAC: default executor agent allowed Bash" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"},"session_id":"gp-003","cwd":"/tmp"}' \
+  0 ""
+
+echo ""
+echo "  -- Sequence Detection (monitor mode -- flags, does not block) --"
+echo ""
+
+# Chain: write script -> chmod +x -> execute. Each call shares session
+# "gp-seq" so the third call's SQLite-backed history lookup sees the first
+# two. Individually each call is exit 0 (monitor mode never blocks);
+# the flag is verified afterward via the JSONL log.
+echo '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"./deploy.sh","content":"echo hi"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"chmod +x ./deploy.sh"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"./deploy.sh"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+
+if grep -q '"sequence_script_injection"' "$JSONL" 2>/dev/null || grep -q "script_injection" "$JSONL" 2>/dev/null; then
+  echo "  PASS Sequence detection: script_injection chain flagged in event log"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL Sequence detection: script_injection chain NOT found in event log"
+  FAIL=$((FAIL + 1))
+fi
 
 # PostToolUse -> observe (exit 0)
 run_test "PostToolUse observe" \

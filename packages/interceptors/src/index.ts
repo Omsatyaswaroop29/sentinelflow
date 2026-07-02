@@ -28,6 +28,15 @@ export type {
 // --- Base Class ---
 export { BaseInterceptor } from "./base";
 
+// --- Handler Codegen (advanced runtime policy config) ---
+export {
+  generatePolicyEvaluationCode,
+  type DataBoundaryCodegenConfig,
+  type IdentityCodegenConfig,
+  type SequenceDetectionCodegenConfig,
+  type AdvancedPolicyCodegenConfig,
+} from "./handler-codegen";
+
 // --- Framework Interceptors ---
 export {
   ClaudeCodeInterceptor,

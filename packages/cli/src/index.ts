@@ -34,13 +34,15 @@ import {
   eventsStatsCommand,
 } from "./commands/events";
 import { costsCommand } from "./commands/costs";
+import { anomaliesCommand } from "./commands/anomalies";
+import { CLI_VERSION } from "./version";
 
 const program = new Command();
 
 program
   .name("sentinelflow")
   .description("The vendor-neutral governance layer for enterprise AI agents")
-  .version("0.3.1");
+  .version(CLI_VERSION);
 
 // ── sentinelflow scan ───────────────────────────────────────
 program
@@ -72,7 +74,7 @@ intercept
   .description("Install runtime governance hooks into a project")
   .argument("[path]", "Project directory", ".")
   .option("--framework <fw>", "Framework: claude-code, cursor (auto-detected if omitted)")
-  .option("--mode <mode>", "Enforcement mode: monitor, enforce", "monitor")
+  .option("--mode <mode>", "Enforcement mode: monitor, enforce (default: from .sentinelflow-policy.yaml, falling back to monitor)")
   .option("--blocklist <tools>", "Comma-separated tools to block")
   .option("--allowlist <tools>", "Comma-separated tools to allow (blocks all others)")
   .option("--egress-allow <domains>", "Comma-separated domains to allow for outbound egress (exact or wildcard like \"*.corp.internal\")")
@@ -158,6 +160,16 @@ program
   .option("--agent <id>", "Filter by agent ID")
   .option("--format <fmt>", "Output format: table, json", "table")
   .action(costsCommand);
+
+// ── sentinelflow anomalies ───────────────────────────────────
+program
+  .command("anomalies")
+  .description("Batch anomaly detection (novel tool, cost spike, error rate) over event history")
+  .argument("[path]", "Project directory", ".")
+  .option("--since <duration>", "Time window: 1h, 24h, 7d, 30d", "7d")
+  .option("--agent <id>", "Filter by agent ID")
+  .option("--format <fmt>", "Output format: table, json", "table")
+  .action(anomaliesCommand);
 
 // ── sentinelflow registry ───────────────────────────────────
 const registry = program

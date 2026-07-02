@@ -37,7 +37,7 @@ import { SHELL_TOOL_NAMES } from "./patterns";
 
 // ─── Role → Privilege Level Mapping ─────────────────────────────────
 
-const DEFAULT_ROLE_PRIVILEGES: Record<AgentRole, number> = {
+export const DEFAULT_ROLE_PRIVILEGES: Record<AgentRole, number> = {
   reader: 2,
   writer: 4,
   executor: 6,
@@ -52,7 +52,7 @@ const DEFAULT_ROLE_PRIVILEGES: Record<AgentRole, number> = {
  * Default tool privilege requirements.
  * Tools not listed here require privilege level 1 (anyone can use them).
  */
-const DEFAULT_TOOL_PRIVILEGES: Record<string, number> = {
+export const DEFAULT_TOOL_PRIVILEGES: Record<string, number> = {
   // Shell tools require executor (6) or higher
   Bash: 6, bash: 6, shell: 6, Shell: 6,
   terminal: 6, Terminal: 6, exec: 6, Exec: 6,

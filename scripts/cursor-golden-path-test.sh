@@ -16,6 +16,28 @@ echo ""
 TEST_DIR=$(mktemp -d /tmp/sf-cursor-gp-XXXXXX)
 mkdir -p "$TEST_DIR/.cursor"
 
+# Make better-sqlite3 resolvable from TEST_DIR so sequence detection (which
+# is SQLite-backed) actually runs instead of silently no-op'ing.
+REAL_SQLITE=$(node -e "console.log(require.resolve('better-sqlite3', { paths: [process.cwd()] }).split('/lib/')[0])" 2>/dev/null || true)
+if [ -n "$REAL_SQLITE" ] && [ -d "$REAL_SQLITE" ]; then
+  mkdir -p "$TEST_DIR/node_modules"
+  ln -sf "$REAL_SQLITE" "$TEST_DIR/node_modules/better-sqlite3"
+fi
+
+# Policy YAML: data boundary in enforce mode (identity stays at default
+# executor role so it doesn't interfere with the existing Bash tests below;
+# RBAC-specific blocking is tested separately further down via reinstall).
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  data_boundary:
+    enabled: true
+    enforcement_mode: enforce
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+EOF
+
 # Install Cursor hooks
 node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework cursor --mode enforce --blocklist NotebookEdit --egress-block evil.com
 
@@ -148,6 +170,11 @@ run_test "Read safe file" \
   '{"hook_event_name":"beforeReadFile","conversation_id":"gp-001","generation_id":"g8","file_path":"src/index.ts","content":"export const x = 1;","workspace_roots":["/tmp"]}' \
   "allow"
 
+# Test 8b: Read restricted file (SSH key) → deny (data boundary, enforce mode)
+run_test "Data boundary: read ~/.ssh/id_rsa" \
+  '{"hook_event_name":"beforeReadFile","conversation_id":"gp-001","generation_id":"g8b","file_path":"/home/user/.ssh/id_rsa","content":"","workspace_roots":["/tmp"]}' \
+  "deny"
+
 # Test 9: Invalid JSON → allow (fail-open)
 run_test "Invalid JSON → fail-open" \
   'not valid json {{{' \
@@ -183,6 +210,43 @@ else
   echo "  FAIL stop — exit code $exit_code"
   FAIL=$((FAIL + 1))
 fi
+
+echo ""
+echo "  -- Sequence Detection (monitor mode -- flags, does not block) --"
+echo ""
+
+# Chain: write (via shell redirect) -> chmod +x -> execute, same conversation_id
+# so the third call's SQLite-backed history lookup sees the first two.
+echo '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-seq","generation_id":"gs1","command":"echo hi > ./deploy.sh","cwd":"/tmp","workspace_roots":["/tmp"]}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-seq","generation_id":"gs2","command":"chmod +x ./deploy.sh","cwd":"/tmp","workspace_roots":["/tmp"]}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-seq","generation_id":"gs3","command":"./deploy.sh","cwd":"/tmp","workspace_roots":["/tmp"]}' | node "$HANDLER" > /dev/null 2>&1
+
+if grep -q "script_injection" "$JSONL" 2>/dev/null; then
+  echo "  PASS Sequence detection: script_injection chain flagged in event log"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL Sequence detection: script_injection chain NOT found in event log"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+echo "  -- RBAC (reinstall with reader role for cursor-agent) --"
+echo ""
+
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  identity:
+    enabled: true
+    enforcement_mode: enforce
+    agent_roles:
+      cursor-agent: reader
+EOF
+node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework cursor --mode enforce > /dev/null 2>&1
+
+run_test "RBAC: reader-role cursor-agent blocked from Bash" \
+  '{"hook_event_name":"beforeShellExecution","conversation_id":"gp-004","generation_id":"g11","command":"npm test","cwd":"/tmp","workspace_roots":["/tmp"]}' \
+  "deny"
 
 echo ""
 echo "  -- Event Store Verification --"

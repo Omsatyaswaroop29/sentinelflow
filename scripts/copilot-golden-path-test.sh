@@ -14,6 +14,28 @@ echo ""
 TEST_DIR=$(mktemp -d /tmp/sf-copilot-gp-XXXXXX)
 mkdir -p "$TEST_DIR/.github"
 
+# Make better-sqlite3 resolvable from TEST_DIR so sequence detection (which
+# is SQLite-backed) actually runs instead of silently no-op'ing.
+REAL_SQLITE=$(node -e "console.log(require.resolve('better-sqlite3', { paths: [process.cwd()] }).split('/lib/')[0])" 2>/dev/null || true)
+if [ -n "$REAL_SQLITE" ] && [ -d "$REAL_SQLITE" ]; then
+  mkdir -p "$TEST_DIR/node_modules"
+  ln -sf "$REAL_SQLITE" "$TEST_DIR/node_modules/better-sqlite3"
+fi
+
+# Policy YAML: data boundary in enforce mode (identity stays at default
+# executor role so it doesn't interfere with the existing bash tests below;
+# RBAC-specific blocking is tested separately further down via reinstall).
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  data_boundary:
+    enabled: true
+    enforcement_mode: enforce
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+EOF
+
 node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework copilot --mode enforce --blocklist NotebookEdit --egress-block evil.com
 
 HANDLER="$TEST_DIR/.sentinelflow/copilot-handler.js"
@@ -161,6 +183,48 @@ run_test "Empty stdin -> fail-open" \
 run_test "toolArgs JSON string parsing" \
   '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"rm -rf /etc/passwd\"}","hookEventName":"PreToolUse"}' \
   2 "rm -rf"
+
+# Test 14: Data boundary -- read a restricted path (SSH key) -> block (enforce mode)
+run_test "Data boundary: read ~/.ssh/id_rsa" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"read","toolArgs":"{\"file\":\"/home/user/.ssh/id_rsa\"}","hookEventName":"PreToolUse","sessionId":"test-001"}' \
+  2 "Data boundary"
+
+echo ""
+echo "  -- Sequence Detection (monitor mode -- flags, does not block) --"
+echo ""
+
+# Chain: write -> chmod +x -> execute, same sessionId so the third call's
+# SQLite-backed history lookup sees the first two.
+echo '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"echo hi > ./deploy.sh\"}","hookEventName":"PreToolUse","sessionId":"gp-seq"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"chmod +x ./deploy.sh\"}","hookEventName":"PreToolUse","sessionId":"gp-seq"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"./deploy.sh\"}","hookEventName":"PreToolUse","sessionId":"gp-seq"}' | node "$HANDLER" > /dev/null 2>&1
+
+if grep -q "script_injection" "$JSONL" 2>/dev/null; then
+  echo "  PASS Sequence detection: script_injection chain flagged in event log"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL Sequence detection: script_injection chain NOT found in event log"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+echo "  -- RBAC (reinstall with reader role for copilot-agent) --"
+echo ""
+
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  identity:
+    enabled: true
+    enforcement_mode: enforce
+    agent_roles:
+      copilot-agent: reader
+EOF
+node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework copilot --mode enforce > /dev/null 2>&1
+
+run_test "RBAC: reader-role copilot-agent blocked from bash" \
+  '{"timestamp":1704614400000,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"npm test\"}","hookEventName":"PreToolUse","sessionId":"test-002"}' \
+  2 "RBAC"
 
 echo ""
 echo "  -- Event Store --"

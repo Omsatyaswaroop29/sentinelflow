@@ -6,6 +6,9 @@
 
 import type { ScanResult } from "./engine";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const SCANNER_PACKAGE_VERSION = (require("../package.json") as { version: string }).version;
+
 // ANSI color codes
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -34,14 +37,15 @@ const SEVERITY_LABELS: Record<string, string> = {
   info: "INFO",
 };
 
-export function formatTerminal(result: ScanResult): string {
+export function formatTerminal(result: ScanResult, opts?: { version?: string }): string {
   const lines: string[] = [];
   const { report, agents, frameworks } = result;
+  const version = opts?.version ?? SCANNER_PACKAGE_VERSION;
 
   // Header
   lines.push("");
   lines.push(
-    `  ${BOLD}${CYAN}SentinelFlow v0.3.0${RESET} ${DIM}— Agent Governance Platform${RESET}`
+    `  ${BOLD}${CYAN}SentinelFlow v${version}${RESET} ${DIM}— Agent Governance Platform${RESET}`
   );
   lines.push("");
   lines.push(`  Scanning ${BOLD}${report.root_dir}${RESET}...`);

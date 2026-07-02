@@ -180,6 +180,7 @@ sentinelflow events tail .               # recent events across all frameworks
 sentinelflow events blocked .            # blocked tool calls with reasons
 sentinelflow events stats .              # aggregate statistics
 sentinelflow costs . --window 7d         # token spend by agent
+sentinelflow anomalies . --since 7d      # batch anomaly detection (novel tool, cost spike, error rate)
 
 # Remove hooks when done
 sentinelflow intercept uninstall .
@@ -187,9 +188,9 @@ sentinelflow intercept uninstall .
 
 **How it works:** Each framework has its own hooks contract. SentinelFlow generates a framework-specific handler script (`.sentinelflow/handler.js` for Claude Code, `.sentinelflow/cursor-handler.js` for Cursor, `.sentinelflow/copilot-handler.js` for Copilot, `.sentinelflow/codex-handler.js` for Codex) that evaluates policies, writes events, and returns allow/block decisions using the correct protocol for each platform.
 
-**Built-in policies:** Enterprise policy engine backed by a central registry (**18 dangerous command patterns**, **15 secret patterns**, **12 sensitive file write path patterns**, **7 network egress patterns**) plus **8 runtime policies** (allowlist, blocklist, dangerous commands, secrets leak, file write governance, network egress, data boundary, and cost budgets). Generated hook handlers currently **enforce a safe core subset** (allow/block lists + dangerous commands + secrets + sensitive write paths + network egress domain allow/block lists); the remaining policies are implemented in TypeScript and are next for handler parity.
+**Built-in policies:** Enterprise policy engine backed by a central registry (**18 dangerous command patterns**, **15 secret patterns**, **12 sensitive file write path patterns**, **7 network egress patterns**). Generated hook handlers enforce the full policy set: tool allow/blocklist, dangerous commands, secrets leak, sensitive file write governance, network egress — **plus data boundary classification, identity/role-based access control, environment policy, and multi-step sequence detection**, all wired directly into the handlers your framework actually calls (not just the TypeScript library). Cost budgets remain TypeScript-only: no supported framework exposes token/cost data in hook payloads yet, so there's nothing to block on in real time — use `sentinelflow costs`/`sentinelflow anomalies` for after-the-fact cost governance instead.
 
-**Two modes:** `monitor` logs everything but never blocks — start here. `enforce` actually blocks dangerous tool calls, with the block reason fed back to the AI model.
+**Two enforcement modes, set independently per policy:** `monitor` logs everything but never blocks; `enforce` actually blocks. The core subset (dangerous commands, secrets, egress, allow/blocklist) and each advanced policy (data boundary, identity/RBAC, sequence detection) have **independent enforcement modes** — the advanced policies default to `monitor` even if you've already graduated the core subset to `enforce`, so upgrading never silently starts blocking things it didn't before. Configure via `.sentinelflow-policy.yaml`'s `runtime_policies` section (loaded automatically by `intercept install`, with CLI flags taking precedence) — see `.sentinelflow-policy.example.yaml` for the full schema.
 
 **Fail-open by default:** If any handler crashes or can't parse input, it allows the tool call. SentinelFlow never silently breaks your development workflow.
 
@@ -211,6 +212,8 @@ Single tool-call checks miss attacks that span multiple steps. The sequence dete
 - **Privilege chain** — write to a privilege-granting file (`authorized_keys`, `sudoers`, `.npmrc`, `.aws/credentials`, `.kube/config`) → `source`/`systemctl reload`/`npm install`
 
 Each detection is deterministic (no ML, no probabilistic scoring) and explainable: the response includes the full chain of events that triggered it.
+
+Framework hooks spawn a fresh handler process for every tool call — they're not long-running daemons — so the generated handlers reconstruct session history from the same SQLite event store they already write to, rather than an in-memory window. If `better-sqlite3` isn't available, sequence detection no-ops gracefully (it needs persisted history to correlate against; everything else keeps working via the JSONL fallback).
 
 ```text
   ⚠ SEQUENCE DETECTED — script_injection (confidence: 0.92)
@@ -280,7 +283,11 @@ Every blocked action carries the audit trail of who owns the agent, what role it
 
 ### Anomaly Detection
 
-The anomaly engine ties the above together with four detectors that flag unusual behavior without blocking: **novel tool** (a tool used for the first time by an agent), **cost spike** (token usage that exceeds the agent's rolling baseline), **error rate** (sustained failure patterns), and **privilege escalation** (attempts to gain capabilities the agent didn't previously have). The sequence detector plugs into the same engine as a fifth detector.
+`sentinelflow anomalies` runs a batch pass over event history with three statistical detectors: **novel tool** (a tool used for the first time by an agent), **cost spike** (token usage that exceeds the agent's rolling baseline), and **error rate** (sustained failure patterns). These need many events to build a baseline, so they're a periodic/on-demand check rather than something evaluated synchronously on every tool call. **Privilege escalation** detection is included automatically once you configure `identity.agent_roles`/`agent_privileges` in `.sentinelflow-policy.yaml` — without real per-agent data it would flag nearly every Bash/Write call, and real-time RBAC already covers that concern with a better-calibrated default.
+
+```bash
+sentinelflow anomalies . --since 7d
+```
 
 ```text
   ⚠ ANOMALY — cost_spike (confidence: 0.81)
@@ -289,7 +296,7 @@ The anomaly engine ties the above together with four detectors that flag unusual
   Detected:  84,000 tokens in last hour  (12.3× baseline)
   Baseline:  rolling 30-day p50 = 6,820 tokens/hour
 
-  Action:    logged  (anomalies are observe-only by default)
+  Action:    logged  (anomalies are observe-only)
 ```
 
 ## Cost Visibility
@@ -386,7 +393,7 @@ Every new governance rule goes through a six-step closed loop: parser engineer �
 
 **Runtime interception — Claude Code v2.1.91, live session.** The generated handler script successfully blocked `rm -rf /home/user/important-data`; the model received the block reason through the hook contract and acknowledged the policy restriction in its next response.
 
-**Test coverage.** 228+ Vitest unit and E2E tests across the interceptors package, plus four golden-path shell scripts that exercise the full install → execute → block contract against generated handler scripts for each supported framework (Claude Code, Cursor, GitHub Copilot, Codex CLI).
+**Test coverage.** 442 Vitest unit and E2E tests across all five packages (258 in the interceptors package alone, including E2E tests that spawn the actual generated handler scripts as subprocesses), plus four golden-path shell scripts totaling 92 assertions that exercise the full install → execute → block contract — including data boundary, RBAC, and sequence detection — against generated handler scripts for each supported framework (Claude Code, Cursor, GitHub Copilot, Codex CLI).
 
 ## Contributing
 

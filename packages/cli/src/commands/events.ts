@@ -7,7 +7,7 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { EventStoreReader } from "@sentinelflow/core";
+import { EventStoreReader, isSqliteAvailable } from "@sentinelflow/core";
 
 // ─── JSONL Fallback ─────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ export async function eventsTailCommand(
 
   let events: Array<Record<string, unknown>>;
 
-  if (hasDb(projectDir)) {
+  if (hasDb(projectDir) && isSqliteAvailable()) {
     const reader = new EventStoreReader({ projectDir });
     events = reader.getEvents({
       agent_id: options.agent, tool_name: options.tool,
@@ -144,7 +144,7 @@ export async function eventsBlockedCommand(
 
   let events: Array<Record<string, unknown>>;
 
-  if (hasDb(projectDir)) {
+  if (hasDb(projectDir) && isSqliteAvailable()) {
     const reader = new EventStoreReader({ projectDir });
     events = reader.getBlockedToolCalls(since.toISOString(), options.agent, limit) as unknown as Array<Record<string, unknown>>;
     reader.close();
@@ -195,7 +195,7 @@ export async function eventsStatsCommand(
   let sizeKb = "0";
   let storePath = "";
 
-  if (hasDb(projectDir)) {
+  if (hasDb(projectDir) && isSqliteAvailable()) {
     const reader = new EventStoreReader({ projectDir });
     total = reader.countEvents();
     blocked = reader.countEvents({ outcome: "blocked" as any });

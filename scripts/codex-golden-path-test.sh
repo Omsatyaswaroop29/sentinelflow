@@ -14,6 +14,28 @@ echo ""
 TEST_DIR=$(mktemp -d /tmp/sf-codex-gp-XXXXXX)
 mkdir -p "$TEST_DIR/.codex"
 
+# Make better-sqlite3 resolvable from TEST_DIR so sequence detection (which
+# is SQLite-backed) actually runs instead of silently no-op'ing.
+REAL_SQLITE=$(node -e "console.log(require.resolve('better-sqlite3', { paths: [process.cwd()] }).split('/lib/')[0])" 2>/dev/null || true)
+if [ -n "$REAL_SQLITE" ] && [ -d "$REAL_SQLITE" ]; then
+  mkdir -p "$TEST_DIR/node_modules"
+  ln -sf "$REAL_SQLITE" "$TEST_DIR/node_modules/better-sqlite3"
+fi
+
+# Policy YAML: data boundary in enforce mode (identity stays at default
+# executor role so it doesn't interfere with the existing Bash tests below;
+# RBAC-specific blocking is tested separately further down via reinstall).
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  data_boundary:
+    enabled: true
+    enforcement_mode: enforce
+  sequence_detection:
+    enabled: true
+    enforcement_mode: monitor
+EOF
+
 node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework codex --mode enforce --blocklist NotebookEdit --egress-block evil.com
 
 HANDLER="$TEST_DIR/.sentinelflow/codex-handler.js"
@@ -157,6 +179,51 @@ run_test "Invalid JSON fail-open" \
 run_test "Empty stdin fail-open" \
   '' \
   0 ""
+
+# Test 13: Data boundary -- cat a restricted path (SSH key) -> block (enforce mode)
+# Codex's PreToolUse currently only supports Bash, so this exercises the
+# shell-command path-extraction branch (also a regression guard for the
+# ~/-prefixed path detection bug found during development).
+run_test "Data boundary: cat ~/.ssh/id_rsa via Bash" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat ~/.ssh/id_rsa"},"session_id":"gp-001","cwd":"/tmp"}' \
+  2 "Data boundary"
+
+echo ""
+echo "  -- Sequence Detection (monitor mode -- flags, does not block) --"
+echo ""
+
+# Chain: write -> chmod +x -> execute, same session_id so the third call's
+# SQLite-backed history lookup sees the first two.
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi > ./deploy.sh"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"chmod +x ./deploy.sh"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"./deploy.sh"},"session_id":"gp-seq","cwd":"/tmp"}' | node "$HANDLER" > /dev/null 2>&1
+
+if grep -q "script_injection" "$JSONL" 2>/dev/null; then
+  echo "  PASS Sequence detection: script_injection chain flagged in event log"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL Sequence detection: script_injection chain NOT found in event log"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+echo "  -- RBAC (reinstall with reader role for codex-agent) --"
+echo ""
+
+cat > "$TEST_DIR/.sentinelflow-policy.yaml" << 'EOF'
+version: v1
+runtime_policies:
+  identity:
+    enabled: true
+    enforcement_mode: enforce
+    agent_roles:
+      codex-agent: reader
+EOF
+node packages/cli/dist/bundle.js intercept install "$TEST_DIR" --framework codex --mode enforce > /dev/null 2>&1
+
+run_test "RBAC: reader-role codex-agent blocked from Bash" \
+  '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"},"session_id":"gp-002","cwd":"/tmp"}' \
+  2 "RBAC"
 
 echo ""
 echo "  -- Event Store --"

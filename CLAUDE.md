@@ -36,8 +36,8 @@ This is a pnpm workspace monorepo managed by Turborepo with 5 packages.
 - **`packages/core`** — Universal agent schema, event types (`AgentEvent` with identity context), registry abstractions (`IRegistry`), and SQLite-backed governance event store.
 - **`packages/parsers`** — 6 framework-specific parsers (Claude Code, Cursor, Codex, LangChain, CrewAI, Kiro) that normalize configs into the core schema.
 - **`packages/scanner`** — 46 governance rules across 10 categories, suppression system, formatters for SARIF/JSON/Markdown/terminal. Rules map to OWASP LLM Top 10, EU AI Act, NIST AI RMF, MITRE ATLAS, ISO 42001, SOC 2, HIPAA, GDPR.
-- **`packages/interceptors`** — Runtime agent firewall: 4 framework interceptors, 8 enterprise policy classes, central pattern registry, command normalizer, shared handler code generator, multi-step sequence detector, data boundary classification, identity governance, hierarchical escalation, compliance mappings, anomaly detectors, event listeners. 18 source files, 11 test files, 228+ tests.
-- **`packages/cli`** — CLI entrypoint bundled to ~800KB via esbuild. Commands: `scan`, `intercept install/uninstall/status/tail`, `intercept test`, `events tail/blocked/stats`, `costs`, `init`.
+- **`packages/interceptors`** — Runtime agent firewall: 4 framework interceptors, 8 enterprise policy classes, central pattern registry, command normalizer, shared handler code generator, multi-step sequence detector, data boundary classification, identity governance, hierarchical escalation, compliance mappings, anomaly detectors, event listeners. 18 source files, 11 test files, 258 tests. `handler-codegen.ts` wires data boundary, identity/RBAC/environment policy, and SQLite-backed sequence detection directly into every generated handler (not just the standalone TS classes) — each with its own independent enforcement mode, defaulting to monitor.
+- **`packages/cli`** — CLI entrypoint bundled to ~800KB via esbuild. Commands: `scan`, `intercept install/uninstall/status/tail`, `intercept test`, `events tail/blocked/stats`, `costs`, `anomalies`, `init`.
 
 ---
 
@@ -126,7 +126,7 @@ Anyone modifying handler scripts or the code generator **must** read this sectio
 
 ### Unit tests (Vitest)
 
-228+ tests across 11 test files in interceptors, plus core/parsers/scanner tests. Key files: `policies-enterprise.test.ts` (66), `sequence-boundary.test.ts` (41), `identity-compliance.test.ts` (30+), `escalation.test.ts`, and 4 handler E2E test files (12-14 tests each).
+442 tests total across all 5 packages (258 across 11 test files in interceptors, 84 in scanner, 47 in core, 47 in parsers, plus cli). Key interceptors files: `policies-enterprise.test.ts` (66), `sequence-boundary.test.ts` (41), `identity-compliance.test.ts` (28), `escalation.test.ts`, and 4 handler E2E test files (12-14 tests each).
 
 ### Golden path tests (bash)
 
@@ -151,6 +151,9 @@ Add to `patterns.ts` with unique ID (DC-xxx, SK-xxx, FW-xxx, NE-xxx). Add test i
 
 ### Modify handler code generation
 Edit `handler-codegen.ts`. No regex literals. No handler-template function references. Test with `pnpm build && pnpm test` plus all 4 golden paths. If tests pass but golden paths fail, the generated handler has a runtime error.
+
+### Add/modify an advanced runtime policy (data boundary, identity/RBAC, sequence detection)
+Config flows: `.sentinelflow-policy.yaml` → `RuntimePoliciesConfig` (parsed in `packages/scanner/src/suppression.ts`) → mapped to `*CodegenConfig` shapes in `packages/cli/src/commands/intercept.ts` → passed to each of the 4 interceptors' constructors → threaded into `generatePolicyEvaluationCode()` in `handler-codegen.ts`. Each policy has its own `enabled`/`enforcement_mode` defaulting to enabled+monitor, independent of the core subset's enforcement mode — never make a new policy enforce-by-default without an explicit decision to do so. Sequence detection is the one exception to "stateless per-call": since handler processes are spawned fresh per tool call, it queries the SQLite `events` table for session history instead of an in-memory window (see `evaluateSequence()` in `handler-codegen.ts`) — it silently no-ops if `better-sqlite3` is unavailable.
 
 ### Add a framework interceptor
 Create interceptor class → use `generatePolicyEvaluationCode()` → add to CLI → write golden path script → write E2E tests → export from index.ts.

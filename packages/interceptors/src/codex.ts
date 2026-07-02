@@ -52,6 +52,11 @@ import { v4 as uuidv4 } from "uuid";
 import type { AgentEvent } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
 import { generatePolicyEvaluationCode } from "./handler-codegen";
+import type {
+  DataBoundaryCodegenConfig,
+  IdentityCodegenConfig,
+  SequenceDetectionCodegenConfig,
+} from "./handler-codegen";
 import type { InterceptorConfig } from "./interface";
 
 // ─── Configuration ──────────────────────────────────────────────────
@@ -67,6 +72,12 @@ export interface CodexInterceptorConfig extends Partial<InterceptorConfig> {
   /** Blocked outbound domains for network egress governance (exact matches) */
   egressBlockedDomains?: string[];
   maxInputSummaryLength?: number;
+  /** Data boundary classification config (public/internal/restricted/system). Enabled+monitor by default. */
+  dataBoundary?: DataBoundaryCodegenConfig;
+  /** Identity/RBAC + environment policy config. Enabled+monitor by default. */
+  identity?: IdentityCodegenConfig;
+  /** Multi-step attack sequence detection config. Enabled+monitor by default. */
+  sequenceDetection?: SequenceDetectionCodegenConfig;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -94,6 +105,9 @@ export class CodexInterceptor extends BaseInterceptor {
   private _egressBlockedDomains: string[];
   private _maxInputLength: number;
   private _originalHooksJson: string | null = null;
+  private _dataBoundary?: DataBoundaryCodegenConfig;
+  private _identity?: IdentityCodegenConfig;
+  private _sequenceDetection?: SequenceDetectionCodegenConfig;
 
   constructor(config: CodexInterceptorConfig) {
     super(config);
@@ -107,6 +121,9 @@ export class CodexInterceptor extends BaseInterceptor {
     this._egressAllowedDomains = [...(config.egressAllowedDomains ?? [])];
     this._egressBlockedDomains = [...(config.egressBlockedDomains ?? [])];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
+    this._dataBoundary = config.dataBoundary;
+    this._identity = config.identity;
+    this._sequenceDetection = config.sequenceDetection;
   }
 
   // ─── Static Helpers ─────────────────────────────────────────
@@ -254,7 +271,11 @@ export class CodexInterceptor extends BaseInterceptor {
    * (PreToolUse, PostToolUse, etc.) — same as Claude Code.
    */
   private generateHandlerScript(): string {
-    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode, {
+      dataBoundary: this._dataBoundary,
+      identity: this._identity,
+      sequenceDetection: this._sequenceDetection,
+    });
 
     return `#!/usr/bin/env node
 /**
@@ -411,7 +432,13 @@ function summarizeInput(input) {
     switch (hookEvent) {
 
     case "PreToolUse": {
-      const policy = evaluatePolicy(toolName, toolInput);
+      const agentId = "codex-agent";
+      let policy = evaluatePolicy(toolName, toolInput, agentId);
+      const seq = evaluateSequence(sessionId, toolName, inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
       const isBlock = policy.block;
       const isFlag = !isBlock && policy.flag;
 
@@ -419,7 +446,7 @@ function summarizeInput(input) {
         isBlock ? "tool_call_blocked" : (isFlag ? "tool_call_flagged" : "tool_call_attempted"),
         isBlock ? "blocked" : "allowed",
         isBlock ? "high" : (isFlag ? "medium" : "info"),
-        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+        { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
           action: inputSummary, policy_id: policy.id, reason: policy.reason,
           payload: { hook: "PreToolUse", cwd: input.cwd } }
       ));

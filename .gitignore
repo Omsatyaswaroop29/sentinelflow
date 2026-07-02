@@ -6,6 +6,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated at build time (copied from repo root so npm's "files" allowlist,
+# which is relative to the package root, actually resolves them)
+packages/cli/README.md
+packages/cli/LICENSE
+
 # Test & coverage
 coverage/
 .vitest/

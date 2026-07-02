@@ -1,11 +1,13 @@
 {
   "name": "@sentinelflow/scanner",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Static analysis engine for AI agent governance",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "license": "MIT",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -14,7 +16,8 @@
   },
   "dependencies": {
     "@sentinelflow/core": "workspace:*",
-    "@sentinelflow/parsers": "workspace:*"
+    "@sentinelflow/parsers": "workspace:*",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "vitest": "^2.1.0",

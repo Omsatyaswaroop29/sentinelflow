@@ -17,6 +17,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as YAML from "yaml";
 import type { EnterpriseFinding } from "./rules/interface";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -52,6 +53,7 @@ export interface PolicyFile {
   severity_overrides?: Record<string, string>;
   exclude?: string[];
   preset?: "strict" | "standard" | "monitor";
+  runtime_policies?: RuntimePoliciesConfig;
 }
 
 export interface PolicyIgnoreEntry {
@@ -63,6 +65,60 @@ export interface PolicyIgnoreEntry {
 }
 
 export type ScanPreset = "strict" | "standard" | "monitor";
+
+export type DataClassificationLevel = "public" | "internal" | "restricted" | "system";
+
+export interface RuntimeAgentClearance {
+  agent: string;
+  max_classification: DataClassificationLevel;
+}
+
+export interface RuntimeClassificationRule {
+  pattern: string;
+  classification: DataClassificationLevel;
+  label?: string;
+}
+
+export interface RuntimeDataBoundaryConfig {
+  enabled?: boolean;
+  enforcement_mode?: "monitor" | "enforce";
+  default_max_classification?: DataClassificationLevel;
+  agent_clearances?: RuntimeAgentClearance[];
+  custom_rules?: RuntimeClassificationRule[];
+}
+
+export interface RuntimeIdentityConfig {
+  enabled?: boolean;
+  enforcement_mode?: "monitor" | "enforce";
+  human_owner?: string;
+  human_email?: string;
+  team?: string;
+  environment?: "development" | "staging" | "production" | "ci";
+  role?: "reader" | "writer" | "executor" | "deployer" | "admin" | "custom";
+  privilege_level?: number;
+  external_facing?: boolean;
+  agent_roles?: Record<string, string>;
+  agent_privileges?: Record<string, number>;
+}
+
+export interface RuntimeSequenceDetectionConfig {
+  enabled?: boolean;
+  enforcement_mode?: "monitor" | "enforce";
+  window_minutes?: number;
+  min_confidence?: number;
+}
+
+export interface RuntimePoliciesConfig {
+  blocked_tools?: string[];
+  allowed_tools?: string[];
+  max_cost_per_session?: number;
+  enforcement_mode?: "monitor" | "enforce";
+  egress_allowed_domains?: string[];
+  egress_blocked_domains?: string[];
+  data_boundary?: RuntimeDataBoundaryConfig;
+  identity?: RuntimeIdentityConfig;
+  sequence_detection?: RuntimeSequenceDetectionConfig;
+}
 
 // ─── Inline Suppression Parser ──────────────────────────────
 
@@ -130,9 +186,8 @@ export function loadPolicyFile(rootDir: string): {
 
     try {
       const content = fs.readFileSync(filePath, "utf-8");
-      // Simple YAML-like parsing for the policy file structure
-      // In production, use yaml package — for now, parse the structured format
-      const policy = parseSimpleYAML(content);
+      const parsed = YAML.parse(content) as Record<string, unknown> | null;
+      const policy = normalizePolicyFile(parsed ?? {}, warnings);
       return { policy, warnings };
     } catch (error: unknown) {
       warnings.push(
@@ -144,100 +199,172 @@ export function loadPolicyFile(rootDir: string): {
   return { policy: null, warnings };
 }
 
+const VALID_PRESETS: ScanPreset[] = ["strict", "standard", "monitor"];
+const VALID_CLASSIFICATIONS: DataClassificationLevel[] = ["public", "internal", "restricted", "system"];
+const VALID_ENFORCEMENT_MODES = ["monitor", "enforce"];
+
 /**
- * Simple structured parser for the policy YAML.
- * Handles the specific schema we define — not a full YAML parser.
- * Production version should use the `yaml` npm package.
+ * Normalize a raw parsed YAML object into a well-typed PolicyFile,
+ * tolerating unknown/malformed fields (warns instead of throwing —
+ * a malformed policy file should never take down a scan).
  */
-function parseSimpleYAML(content: string): PolicyFile {
-  const policy: PolicyFile = { version: "v1" };
+function normalizePolicyFile(raw: Record<string, unknown>, warnings: string[]): PolicyFile {
+  const policy: PolicyFile = { version: typeof raw.version === "string" ? raw.version : "v1" };
 
-  // Extract version
-  const versionMatch = content.match(/^version:\s*(.+)$/m);
-  if (versionMatch?.[1]) {
-    policy.version = versionMatch[1].trim();
+  if (typeof raw.preset === "string" && VALID_PRESETS.includes(raw.preset as ScanPreset)) {
+    policy.preset = raw.preset as ScanPreset;
   }
 
-  // Extract preset
-  const presetMatch = content.match(/^preset:\s*(.+)$/m);
-  if (presetMatch?.[1]) {
-    const preset = presetMatch[1].trim() as ScanPreset;
-    if (["strict", "standard", "monitor"].includes(preset)) {
-      policy.preset = preset;
-    }
-  }
-
-  // Extract severity overrides (simple key: value pairs under severity_overrides:)
-  const overridesBlock = content.match(
-    /severity_overrides:\s*\n((?:\s+\S+.*\n)*)/
-  );
-  if (overridesBlock?.[1]) {
+  if (isPlainObject(raw.severity_overrides)) {
     policy.severity_overrides = {};
-    const lines = overridesBlock[1].split("\n");
-    for (const line of lines) {
-      const kvMatch = line.match(/^\s+(SF-[A-Z]+-\d+):\s*(.+)$/);
-      if (kvMatch?.[1] && kvMatch[2]) {
-        policy.severity_overrides[kvMatch[1]] = kvMatch[2].trim();
-      }
+    for (const [ruleId, severity] of Object.entries(raw.severity_overrides)) {
+      if (typeof severity === "string") policy.severity_overrides[ruleId] = severity;
     }
   }
 
-  // Extract exclude patterns
-  const excludeBlock = content.match(/exclude:\s*\n((?:\s+-\s+.+\n)*)/);
-  if (excludeBlock?.[1]) {
-    policy.exclude = [];
-    const lines = excludeBlock[1].split("\n");
-    for (const line of lines) {
-      const itemMatch = line.match(/^\s+-\s+"?([^"]+)"?\s*$/);
-      if (itemMatch?.[1]) {
-        policy.exclude.push(itemMatch[1]);
-      }
-    }
+  if (Array.isArray(raw.exclude)) {
+    policy.exclude = raw.exclude.filter((e): e is string => typeof e === "string");
   }
 
-  // Extract ignore rules (structured blocks under ignore:)
-  const ignoreBlock = content.match(/ignore:\s*\n([\s\S]*?)(?=\n\w|\n*$)/);
-  if (ignoreBlock?.[1]) {
+  if (isPlainObject(raw.ignore)) {
     policy.ignore = {};
-    const ruleBlocks = ignoreBlock[1].split(/\n\s{2}(SF-[A-Z]+-\d+):/);
-
-    for (let i = 1; i < ruleBlocks.length; i += 2) {
-      const ruleId = ruleBlocks[i];
-      const blockContent = ruleBlocks[i + 1] ?? "";
-      if (!ruleId) continue;
-
-      const entries: PolicyIgnoreEntry[] = [];
-      const entryChunks = blockContent.split(/\n\s{4}- /);
-
-      for (const chunk of entryChunks) {
-        if (!chunk.trim()) continue;
-        const entry: PolicyIgnoreEntry = { reason: "" };
-
-        const pathMatch = chunk.match(/path:\s*"?([^"\n]+)"?/);
-        if (pathMatch?.[1]) entry.path = pathMatch[1].trim();
-
-        const reasonMatch = chunk.match(/reason:\s*"?([^"\n]+)"?/);
-        if (reasonMatch?.[1]) entry.reason = reasonMatch[1].trim();
-
-        const expiresMatch = chunk.match(/expires:\s*"?([^"\n]+)"?/);
-        if (expiresMatch?.[1]) entry.expires = expiresMatch[1].trim();
-
-        const approvedMatch = chunk.match(/approved_by:\s*"?([^"\n]+)"?/);
-        if (approvedMatch?.[1]) entry.approved_by = approvedMatch[1].trim();
-
-        const ticketMatch = chunk.match(/ticket:\s*"?([^"\n]+)"?/);
-        if (ticketMatch?.[1]) entry.ticket = ticketMatch[1].trim();
-
-        if (entry.reason) entries.push(entry);
+    for (const [ruleId, entries] of Object.entries(raw.ignore)) {
+      if (!Array.isArray(entries)) continue;
+      const parsedEntries: PolicyIgnoreEntry[] = [];
+      for (const entry of entries) {
+        if (!isPlainObject(entry) || typeof entry.reason !== "string" || !entry.reason) continue;
+        parsedEntries.push({
+          reason: entry.reason,
+          path: typeof entry.path === "string" ? entry.path : undefined,
+          expires: typeof entry.expires === "string" ? entry.expires : undefined,
+          approved_by: typeof entry.approved_by === "string" ? entry.approved_by : undefined,
+          ticket: typeof entry.ticket === "string" ? entry.ticket : undefined,
+        });
       }
-
-      if (entries.length > 0) {
-        policy.ignore[ruleId] = entries;
-      }
+      if (parsedEntries.length > 0) policy.ignore[ruleId] = parsedEntries;
     }
+  }
+
+  if (isPlainObject(raw.runtime_policies)) {
+    policy.runtime_policies = normalizeRuntimePolicies(raw.runtime_policies, warnings);
   }
 
   return policy;
+}
+
+function normalizeRuntimePolicies(raw: Record<string, unknown>, warnings: string[]): RuntimePoliciesConfig {
+  const rp: RuntimePoliciesConfig = {};
+
+  if (Array.isArray(raw.blocked_tools)) {
+    rp.blocked_tools = raw.blocked_tools.filter((t): t is string => typeof t === "string");
+  }
+  if (Array.isArray(raw.allowed_tools)) {
+    rp.allowed_tools = raw.allowed_tools.filter((t): t is string => typeof t === "string");
+  }
+  if (typeof raw.max_cost_per_session === "number") {
+    rp.max_cost_per_session = raw.max_cost_per_session;
+  }
+  if (typeof raw.enforcement_mode === "string" && VALID_ENFORCEMENT_MODES.includes(raw.enforcement_mode)) {
+    rp.enforcement_mode = raw.enforcement_mode as "monitor" | "enforce";
+  }
+  if (Array.isArray(raw.egress_allowed_domains)) {
+    rp.egress_allowed_domains = raw.egress_allowed_domains.filter((d): d is string => typeof d === "string");
+  }
+  if (Array.isArray(raw.egress_blocked_domains)) {
+    rp.egress_blocked_domains = raw.egress_blocked_domains.filter((d): d is string => typeof d === "string");
+  }
+
+  if (isPlainObject(raw.data_boundary)) {
+    const db = raw.data_boundary;
+    const parsed: RuntimeDataBoundaryConfig = {};
+    if (typeof db.enabled === "boolean") parsed.enabled = db.enabled;
+    if (typeof db.enforcement_mode === "string" && VALID_ENFORCEMENT_MODES.includes(db.enforcement_mode)) {
+      parsed.enforcement_mode = db.enforcement_mode as "monitor" | "enforce";
+    }
+    if (typeof db.default_max_classification === "string" && VALID_CLASSIFICATIONS.includes(db.default_max_classification as DataClassificationLevel)) {
+      parsed.default_max_classification = db.default_max_classification as DataClassificationLevel;
+    }
+    if (Array.isArray(db.agent_clearances)) {
+      parsed.agent_clearances = [];
+      for (const c of db.agent_clearances) {
+        if (isPlainObject(c) && typeof c.agent === "string" &&
+            typeof c.max_classification === "string" &&
+            VALID_CLASSIFICATIONS.includes(c.max_classification as DataClassificationLevel)) {
+          parsed.agent_clearances.push({ agent: c.agent, max_classification: c.max_classification as DataClassificationLevel });
+        } else {
+          warnings.push("runtime_policies.data_boundary.agent_clearances: skipped malformed entry");
+        }
+      }
+    }
+    if (Array.isArray(db.custom_rules)) {
+      parsed.custom_rules = [];
+      for (const r of db.custom_rules) {
+        if (isPlainObject(r) && typeof r.pattern === "string" &&
+            typeof r.classification === "string" &&
+            VALID_CLASSIFICATIONS.includes(r.classification as DataClassificationLevel)) {
+          parsed.custom_rules.push({
+            pattern: r.pattern,
+            classification: r.classification as DataClassificationLevel,
+            label: typeof r.label === "string" ? r.label : undefined,
+          });
+        } else {
+          warnings.push("runtime_policies.data_boundary.custom_rules: skipped malformed entry");
+        }
+      }
+    }
+    rp.data_boundary = parsed;
+  }
+
+  if (isPlainObject(raw.identity)) {
+    const id = raw.identity;
+    const parsed: RuntimeIdentityConfig = {};
+    if (typeof id.enabled === "boolean") parsed.enabled = id.enabled;
+    if (typeof id.enforcement_mode === "string" && VALID_ENFORCEMENT_MODES.includes(id.enforcement_mode)) {
+      parsed.enforcement_mode = id.enforcement_mode as "monitor" | "enforce";
+    }
+    if (typeof id.human_owner === "string") parsed.human_owner = id.human_owner;
+    if (typeof id.human_email === "string") parsed.human_email = id.human_email;
+    if (typeof id.team === "string") parsed.team = id.team;
+    if (typeof id.environment === "string" && ["development", "staging", "production", "ci"].includes(id.environment)) {
+      parsed.environment = id.environment as RuntimeIdentityConfig["environment"];
+    }
+    if (typeof id.role === "string" && ["reader", "writer", "executor", "deployer", "admin", "custom"].includes(id.role)) {
+      parsed.role = id.role as RuntimeIdentityConfig["role"];
+    }
+    if (typeof id.privilege_level === "number") parsed.privilege_level = id.privilege_level;
+    if (typeof id.external_facing === "boolean") parsed.external_facing = id.external_facing;
+    if (isPlainObject(id.agent_roles)) {
+      parsed.agent_roles = {};
+      for (const [agent, role] of Object.entries(id.agent_roles)) {
+        if (typeof role === "string") parsed.agent_roles[agent] = role;
+      }
+    }
+    if (isPlainObject(id.agent_privileges)) {
+      parsed.agent_privileges = {};
+      for (const [agent, level] of Object.entries(id.agent_privileges)) {
+        if (typeof level === "number") parsed.agent_privileges[agent] = level;
+      }
+    }
+    rp.identity = parsed;
+  }
+
+  if (isPlainObject(raw.sequence_detection)) {
+    const sd = raw.sequence_detection;
+    const parsed: RuntimeSequenceDetectionConfig = {};
+    if (typeof sd.enabled === "boolean") parsed.enabled = sd.enabled;
+    if (typeof sd.enforcement_mode === "string" && VALID_ENFORCEMENT_MODES.includes(sd.enforcement_mode)) {
+      parsed.enforcement_mode = sd.enforcement_mode as "monitor" | "enforce";
+    }
+    if (typeof sd.window_minutes === "number") parsed.window_minutes = sd.window_minutes;
+    if (typeof sd.min_confidence === "number") parsed.min_confidence = sd.min_confidence;
+    rp.sequence_detection = parsed;
+  }
+
+  return rp;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ─── Suppression Engine ─────────────────────────────────────

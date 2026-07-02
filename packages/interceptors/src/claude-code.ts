@@ -49,6 +49,11 @@ import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
 import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
+  DataBoundaryCodegenConfig,
+  IdentityCodegenConfig,
+  SequenceDetectionCodegenConfig,
+} from "./handler-codegen";
+import type {
   InterceptorConfig,
   PolicyProvider,
   EventListener,
@@ -109,6 +114,12 @@ export interface ClaudeCodeInterceptorConfig extends Partial<InterceptorConfig> 
   maxInputSummaryLength?: number;
   /** Write hooks to settings.json (committed) vs settings.local.json (gitignored). Default: "local" */
   settingsTarget?: "local" | "project";
+  /** Data boundary classification config (public/internal/restricted/system). Enabled+monitor by default. */
+  dataBoundary?: DataBoundaryCodegenConfig;
+  /** Identity/RBAC + environment policy config. Enabled+monitor by default. */
+  identity?: IdentityCodegenConfig;
+  /** Multi-step attack sequence detection config. Enabled+monitor by default. */
+  sequenceDetection?: SequenceDetectionCodegenConfig;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -147,6 +158,9 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
   private _maxInputLength: number;
   private _settingsTarget: "local" | "project";
   private _originalSettings: string | null = null;
+  private _dataBoundary?: DataBoundaryCodegenConfig;
+  private _identity?: IdentityCodegenConfig;
+  private _sequenceDetection?: SequenceDetectionCodegenConfig;
 
   constructor(config: ClaudeCodeInterceptorConfig) {
     super(config);
@@ -161,6 +175,9 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
     this._egressBlockedDomains = [...(config.egressBlockedDomains ?? [])];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
     this._settingsTarget = config.settingsTarget ?? "local";
+    this._dataBoundary = config.dataBoundary;
+    this._identity = config.identity;
+    this._sequenceDetection = config.sequenceDetection;
   }
 
   // ─── Framework Hook Methods ─────────────────────────────────
@@ -509,7 +526,11 @@ export class ClaudeCodeInterceptor extends BaseInterceptor {
    */
   private generateHandlerScript(): string {
     // Generate enterprise policy evaluation code from central registry
-    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode, {
+      dataBoundary: this._dataBoundary,
+      identity: this._identity,
+      sequenceDetection: this._sequenceDetection,
+    });
 
     return `#!/usr/bin/env node
 /**
@@ -668,7 +689,13 @@ async function main() {
 
   switch (hookEvent) {
     case "PreToolUse": {
-      const policy = evaluatePolicy(toolName, toolInput);
+      const agentId = input.agent_name || "claude-code";
+      let policy = evaluatePolicy(toolName, toolInput, agentId);
+      const seq = evaluateSequence(sessionId, toolName, inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
       const isBlock = policy.block;
       const isFlag = !isBlock && policy.flag;
 
@@ -676,7 +703,7 @@ async function main() {
         isBlock ? "tool_call_blocked" : (isFlag ? "tool_call_flagged" : "tool_call_attempted"),
         isBlock ? "blocked" : "allowed",
         isBlock ? "high" : (isFlag ? "medium" : "info"),
-        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+        { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
           action: inputSummary, policy_id: policy.id, reason: policy.reason,
           payload: { hook: "PreToolUse", cwd: input.cwd } }
       ));

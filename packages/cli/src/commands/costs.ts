@@ -15,7 +15,7 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { EventStoreReader } from "@sentinelflow/core";
+import { EventStoreReader, isSqliteAvailable } from "@sentinelflow/core";
 
 function parseDuration(input: string): string {
   const match = input.match(/^(\d+)(d|w)$/);
@@ -51,6 +51,14 @@ export async function costsCommand(
   if (!fs.existsSync(dbPath)) {
     console.log("\n  No event store found. Install hooks and run a session first:");
     console.log("    sentinelflow intercept install\n");
+    process.exit(1);
+  }
+
+  if (!isSqliteAvailable()) {
+    console.log("\n  Cost reporting requires the optional 'better-sqlite3' dependency, which");
+    console.log("  isn't available in this environment. Cost data is only stored in the");
+    console.log("  SQLite event store (there's no JSONL equivalent for rollup aggregation).");
+    console.log("  Install better-sqlite3 to enable 'sentinelflow costs'.\n");
     process.exit(1);
   }
 

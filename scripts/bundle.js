@@ -20,10 +20,21 @@ const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const cliDist = path.join(__dirname, "..", "packages", "cli", "dist");
+const repoRoot = path.join(__dirname, "..");
+const cliDir = path.join(repoRoot, "packages", "cli");
+const cliDist = path.join(cliDir, "dist");
 const bundlePath = path.join(cliDist, "bundle.js");
 
 try {
+  // Copy README.md and LICENSE into packages/cli/ so the "files" allowlist
+  // in package.json (which is relative to the package root, not the repo
+  // root) actually resolves them. Without this, npm pack silently drops
+  // missing allowlist entries instead of failing — the published tarball
+  // shipped with neither for several releases.
+  for (const filename of ["README.md", "LICENSE"]) {
+    fs.copyFileSync(path.join(repoRoot, filename), path.join(cliDir, filename));
+  }
+  console.log("  Copied README.md and LICENSE into packages/cli/");
   execSync(
     `npx esbuild ${path.join(cliDist, "index.js")} ` +
       `--bundle ` +

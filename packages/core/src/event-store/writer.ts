@@ -25,10 +25,11 @@
  *   lifetime of the EventStore instance.
  */
 
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import * as path from "path";
 import * as fs from "fs";
 import type { GovernanceEvent, DailyRollup } from "./schema";
+import { loadBetterSqlite3 } from "./sqlite-loader";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -177,8 +178,17 @@ export class EventStoreWriter {
     this.flushSize = config.flushSize ?? DEFAULT_FLUSH_SIZE;
     this.retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS;
 
+    const SqliteCtor = loadBetterSqlite3();
+    if (!SqliteCtor) {
+      throw new Error(
+        "better-sqlite3 is not available in this environment. The SQLite event store requires " +
+        "the optional 'better-sqlite3' dependency. Install it to enable structured event storage, " +
+        "or continue using the JSONL event log (.sentinelflow/events.jsonl) directly."
+      );
+    }
+
     // Open database with WAL mode for concurrent read/write
-    this.db = new Database(dbPath);
+    this.db = new SqliteCtor(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL"); // Good balance of safety and speed
     this.db.pragma("busy_timeout = 5000");  // Wait up to 5s for locks

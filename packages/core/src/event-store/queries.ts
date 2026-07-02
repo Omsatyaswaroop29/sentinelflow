@@ -22,7 +22,7 @@
  *      ensures reads don't block writes.
  */
 
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import * as path from "path";
 import * as fs from "fs";
 import type {
@@ -32,6 +32,7 @@ import type {
   EventSeverity,
   DailyRollup,
 } from "./schema";
+import { loadBetterSqlite3 } from "./sqlite-loader";
 
 // ─── Query Parameter Types ──────────────────────────────────────────
 
@@ -112,8 +113,17 @@ export class EventStoreReader {
       );
     }
 
+    const SqliteCtor = loadBetterSqlite3();
+    if (!SqliteCtor) {
+      throw new Error(
+        "better-sqlite3 is not available in this environment. Install the optional " +
+        "'better-sqlite3' dependency to query the SQLite event store, or use " +
+        "'sentinelflow intercept tail' which reads the JSONL log directly."
+      );
+    }
+
     // Open read-only connection for safety
-    this.db = new Database(dbPath, { readonly: true });
+    this.db = new SqliteCtor(dbPath, { readonly: true });
     this.db.pragma("busy_timeout = 5000");
   }
 

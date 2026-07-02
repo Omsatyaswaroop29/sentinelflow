@@ -78,3 +78,6 @@ export {
   type ToolUsageSummary,
   type SessionSummary,
 } from "./queries";
+
+// SQLite availability check (better-sqlite3 is an optional native dependency)
+export { isSqliteAvailable } from "./sqlite-loader";

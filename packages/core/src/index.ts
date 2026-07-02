@@ -24,4 +24,5 @@ export {
   type AgentCostSummary,
   type ToolUsageSummary,
   type SessionSummary,
+  isSqliteAvailable,
 } from "./event-store/index";

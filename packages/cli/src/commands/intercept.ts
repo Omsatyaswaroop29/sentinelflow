@@ -11,7 +11,54 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { ClaudeCodeInterceptor, CursorInterceptor, CopilotInterceptor, CodexInterceptor } from "@sentinelflow/interceptors";
+import {
+  ClaudeCodeInterceptor, CursorInterceptor, CopilotInterceptor, CodexInterceptor,
+  type DataBoundaryCodegenConfig, type IdentityCodegenConfig, type SequenceDetectionCodegenConfig,
+} from "@sentinelflow/interceptors";
+import { loadPolicyFile, type RuntimePoliciesConfig } from "@sentinelflow/scanner";
+
+/**
+ * Map the YAML policy schema (snake_case, matches .sentinelflow-policy.yaml)
+ * onto the handler codegen's config shape (camelCase). Fields left
+ * undefined fall back to generatePolicyEvaluationCode()'s own defaults
+ * (enabled + monitor mode).
+ */
+function toDataBoundaryCodegenConfig(cfg?: RuntimePoliciesConfig["data_boundary"]): DataBoundaryCodegenConfig | undefined {
+  if (!cfg) return undefined;
+  return {
+    enabled: cfg.enabled ?? true,
+    enforcementMode: cfg.enforcement_mode ?? "monitor",
+    defaultMaxClassification: cfg.default_max_classification ?? "internal",
+    agentClearances: cfg.agent_clearances ?? [],
+    customRules: cfg.custom_rules ?? [],
+  };
+}
+
+function toIdentityCodegenConfig(cfg?: RuntimePoliciesConfig["identity"]): IdentityCodegenConfig | undefined {
+  if (!cfg) return undefined;
+  const role = cfg.role ?? "executor";
+  const rolePrivileges: Record<string, number> = { reader: 2, writer: 4, executor: 6, deployer: 8, admin: 10, custom: 5 };
+  return {
+    enabled: cfg.enabled ?? true,
+    enforcementMode: cfg.enforcement_mode ?? "monitor",
+    defaultRole: role,
+    defaultPrivilege: cfg.privilege_level ?? rolePrivileges[role] ?? 6,
+    environment: cfg.environment ?? "development",
+    externalFacing: cfg.external_facing ?? false,
+    agentRoles: cfg.agent_roles ?? {},
+    agentPrivileges: cfg.agent_privileges ?? {},
+  };
+}
+
+function toSequenceDetectionCodegenConfig(cfg?: RuntimePoliciesConfig["sequence_detection"]): SequenceDetectionCodegenConfig | undefined {
+  if (!cfg) return undefined;
+  return {
+    enabled: cfg.enabled ?? true,
+    enforcementMode: cfg.enforcement_mode ?? "monitor",
+    windowMinutes: cfg.window_minutes ?? 5,
+    minConfidence: cfg.min_confidence ?? 0.7,
+  };
+}
 
 type Framework = "claude-code" | "cursor" | "copilot" | "codex";
 
@@ -69,6 +116,19 @@ function isInstalled(projectDir: string): { installed: boolean; framework?: Fram
 
 // ─── Install ────────────────────────────────────────────────────────
 
+/**
+ * Load .sentinelflow-policy.yaml's runtime_policies section, if present.
+ * This is the "policy as code" story: config checked into git, not just
+ * passed as CLI flags that nobody remembers to repeat.
+ */
+function loadRuntimePolicyDefaults(projectDir: string): RuntimePoliciesConfig {
+  const { policy, warnings } = loadPolicyFile(projectDir);
+  for (const w of warnings) {
+    console.log(`  Warning: ${w}`);
+  }
+  return policy?.runtime_policies ?? {};
+}
+
 export async function interceptInstallCommand(
   targetPath: string,
   options: {
@@ -85,11 +145,40 @@ export async function interceptInstallCommand(
   if (!fs.existsSync(projectDir)) { console.error(`\n  Error: Directory not found: ${projectDir}\n`); process.exit(1); }
 
   const framework = resolveFramework(projectDir, options.framework);
-  const mode = (options.mode ?? "monitor") as "monitor" | "enforce";
-  const toolBlocklist = options.blocklist ? options.blocklist.split(",").map((t) => t.trim()) : undefined;
-  const toolAllowlist = options.allowlist ? options.allowlist.split(",").map((t) => t.trim()) : undefined;
-  const egressAllowedDomains = options.egressAllow ? options.egressAllow.split(",").map((d) => d.trim()).filter(Boolean) : undefined;
-  const egressBlockedDomains = options.egressBlock ? options.egressBlock.split(",").map((d) => d.trim()).filter(Boolean) : undefined;
+
+  // CLI flags take precedence; .sentinelflow-policy.yaml's runtime_policies
+  // section supplies defaults so policy can be checked into version control
+  // instead of re-typed on every install.
+  const yamlDefaults = loadRuntimePolicyDefaults(projectDir);
+  const usingYamlDefaults: string[] = [];
+
+  const mode = (options.mode ?? yamlDefaults.enforcement_mode ?? "monitor") as "monitor" | "enforce";
+  if (!options.mode && yamlDefaults.enforcement_mode) usingYamlDefaults.push("mode");
+
+  const toolBlocklist = options.blocklist
+    ? options.blocklist.split(",").map((t) => t.trim())
+    : yamlDefaults.blocked_tools;
+  if (!options.blocklist && yamlDefaults.blocked_tools) usingYamlDefaults.push("blocklist");
+
+  const toolAllowlist = options.allowlist
+    ? options.allowlist.split(",").map((t) => t.trim())
+    : yamlDefaults.allowed_tools;
+  if (!options.allowlist && yamlDefaults.allowed_tools) usingYamlDefaults.push("allowlist");
+
+  const egressAllowedDomains = options.egressAllow
+    ? options.egressAllow.split(",").map((d) => d.trim()).filter(Boolean)
+    : yamlDefaults.egress_allowed_domains;
+  if (!options.egressAllow && yamlDefaults.egress_allowed_domains) usingYamlDefaults.push("egress-allow");
+
+  const egressBlockedDomains = options.egressBlock
+    ? options.egressBlock.split(",").map((d) => d.trim()).filter(Boolean)
+    : yamlDefaults.egress_blocked_domains;
+  if (!options.egressBlock && yamlDefaults.egress_blocked_domains) usingYamlDefaults.push("egress-block");
+
+  const maxCostPerSession = options.budget !== undefined
+    ? parseFloat(options.budget)
+    : yamlDefaults.max_cost_per_session;
+  if (options.budget === undefined && yamlDefaults.max_cost_per_session !== undefined) usingYamlDefaults.push("budget");
 
   console.log("");
   console.log("  SentinelFlow Runtime Agent Firewall");
@@ -102,6 +191,28 @@ export async function interceptInstallCommand(
   if (toolAllowlist) console.log(`  Allowlist:   ${toolAllowlist.join(", ")}`);
   if (egressAllowedDomains) console.log(`  Egress allow: ${egressAllowedDomains.join(", ")}`);
   if (egressBlockedDomains) console.log(`  Egress block: ${egressBlockedDomains.join(", ")}`);
+  if (maxCostPerSession !== undefined) {
+    console.log(`  Budget:      $${maxCostPerSession.toFixed(2)}/session`);
+    console.log("    Note: no supported framework exposes token/cost data in hook payloads yet,");
+    console.log("    so this cannot block tool calls in real time. Use 'sentinelflow costs' to");
+    console.log("    review spend after the fact instead.");
+  }
+  if (usingYamlDefaults.length > 0) {
+    console.log(`  (from .sentinelflow-policy.yaml: ${usingYamlDefaults.join(", ")})`);
+  }
+
+  const dataBoundary = toDataBoundaryCodegenConfig(yamlDefaults.data_boundary);
+  const identity = toIdentityCodegenConfig(yamlDefaults.identity);
+  const sequenceDetection = toSequenceDetectionCodegenConfig(yamlDefaults.sequence_detection);
+  if (dataBoundary || identity || sequenceDetection) {
+    const advanced: string[] = [];
+    if (dataBoundary) advanced.push(`data boundary (${dataBoundary.enforcementMode})`);
+    if (identity) advanced.push(`identity/RBAC (${identity.enforcementMode})`);
+    if (sequenceDetection) advanced.push(`sequence detection (${sequenceDetection.enforcementMode})`);
+    console.log(`  Advanced:    ${advanced.join(", ")}`);
+  } else {
+    console.log("  Advanced:    data boundary, identity/RBAC, sequence detection (all enabled, monitor mode -- defaults)");
+  }
 
   // Check existing installation
   const existing = isInstalled(projectDir);
@@ -121,6 +232,9 @@ export async function interceptInstallCommand(
     toolAllowlist,
     egressAllowedDomains,
     egressBlockedDomains,
+    dataBoundary,
+    identity,
+    sequenceDetection,
     log_level: "silent" as const,
   };
 

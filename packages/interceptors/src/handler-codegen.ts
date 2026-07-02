@@ -20,8 +20,76 @@ import {
   SENSITIVE_WRITE_PATHS,
   SHELL_TOOL_NAMES,
 } from "./patterns";
+import { DEFAULT_CLASSIFICATION_RULES, type DataClassification } from "./data-boundary";
+import { DEFAULT_ROLE_PRIVILEGES, DEFAULT_TOOL_PRIVILEGES } from "./identity";
 
-export function generatePolicyEvaluationCode(enforcementMode: string): string {
+// ─── Advanced policy config (data boundary, identity/RBAC, sequence) ──
+
+export interface DataBoundaryCodegenConfig {
+  enabled: boolean;
+  enforcementMode: "monitor" | "enforce";
+  defaultMaxClassification: DataClassification;
+  agentClearances: Array<{ agent: string; max_classification: DataClassification }>;
+  customRules: Array<{ pattern: string; classification: DataClassification; label?: string }>;
+}
+
+export interface IdentityCodegenConfig {
+  enabled: boolean;
+  enforcementMode: "monitor" | "enforce";
+  defaultRole: string;
+  defaultPrivilege: number;
+  environment: string;
+  externalFacing: boolean;
+  agentRoles: Record<string, string>;
+  agentPrivileges: Record<string, number>;
+}
+
+export interface SequenceDetectionCodegenConfig {
+  enabled: boolean;
+  enforcementMode: "monitor" | "enforce";
+  windowMinutes: number;
+  minConfidence: number;
+}
+
+export interface AdvancedPolicyCodegenConfig {
+  dataBoundary?: DataBoundaryCodegenConfig;
+  identity?: IdentityCodegenConfig;
+  sequenceDetection?: SequenceDetectionCodegenConfig;
+}
+
+const DEFAULT_DATA_BOUNDARY: DataBoundaryCodegenConfig = {
+  enabled: true,
+  enforcementMode: "monitor",
+  defaultMaxClassification: "internal",
+  agentClearances: [],
+  customRules: [],
+};
+
+const DEFAULT_IDENTITY: IdentityCodegenConfig = {
+  enabled: true,
+  enforcementMode: "monitor",
+  defaultRole: "executor",
+  defaultPrivilege: DEFAULT_ROLE_PRIVILEGES.executor,
+  environment: "development",
+  externalFacing: false,
+  agentRoles: {},
+  agentPrivileges: {},
+};
+
+const DEFAULT_SEQUENCE_DETECTION: SequenceDetectionCodegenConfig = {
+  enabled: true,
+  enforcementMode: "monitor",
+  windowMinutes: 5,
+  minConfidence: 0.7,
+};
+
+export function generatePolicyEvaluationCode(
+  enforcementMode: string,
+  advanced?: AdvancedPolicyCodegenConfig
+): string {
+  const dataBoundary = { ...DEFAULT_DATA_BOUNDARY, ...advanced?.dataBoundary };
+  const identity = { ...DEFAULT_IDENTITY, ...advanced?.identity };
+  const sequenceDetection = { ...DEFAULT_SEQUENCE_DETECTION, ...advanced?.sequenceDetection };
   // All pattern data goes through JSON.stringify, which correctly
   // handles regex special characters. Patterns are compiled at handler
   // startup via new RegExp(string), not regex literals.
@@ -193,10 +261,267 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
   L(`}).filter(Boolean);`);
   L(``);
   L(`var WRITE_TOOLS = new Set(["Write","write","Edit","edit","MultiEdit","multiedit","Create","create","FileEdit","file_edit","create_file","write_file","edit_file","NotebookEdit","TodoWrite"]);`);
+  L(`var READ_TOOLS = new Set(["Read","read","ReadFile","read_file","View","view","Cat","cat","ListDir","list_dir"]);`);
+  L(``);
+
+  // ─── Data boundary classification ──────────────────────────────
+  const classificationRulesData = JSON.stringify([
+    ...DEFAULT_CLASSIFICATION_RULES.map((r) => ({ pattern: r.pattern, classification: r.classification, label: r.label })),
+    ...dataBoundary.customRules.map((r) => ({ pattern: r.pattern, classification: r.classification, label: r.label ?? "Custom rule" })),
+  ]);
+  const agentClearancesData = JSON.stringify(dataBoundary.agentClearances);
+
+  L(`// --- Data boundary classification (public/internal/restricted/system) ---`);
+  L(`var DATA_BOUNDARY_ENABLED = ${JSON.stringify(dataBoundary.enabled)};`);
+  L(`var DATA_BOUNDARY_MODE = ${JSON.stringify(dataBoundary.enforcementMode)};`);
+  L(`var DATA_BOUNDARY_DEFAULT_MAX = ${JSON.stringify(dataBoundary.defaultMaxClassification)};`);
+  L(`var _sfClassLevel = { public: 0, internal: 1, restricted: 2, system: 3 };`);
+  L(`var _sfClassRules = ${classificationRulesData}.map(function(r) {`);
+  L(`  try { return { re: new RegExp(r.pattern, "i"), classification: r.classification, label: r.label }; }`);
+  L(`  catch(e) { return null; }`);
+  L(`}).filter(Boolean);`);
+  L(`var _sfClearanceExact = {};`);
+  L(`var _sfClearanceWild = [];`);
+  L(`(function() {`);
+  L(`  var list = ${agentClearancesData};`);
+  L(`  for (var i = 0; i < list.length; i++) {`);
+  L(`    var c = list[i];`);
+  L(`    if (c.agent.indexOf("*") !== -1) {`);
+  L(`      try { _sfClearanceWild.push({ re: new RegExp("^" + c.agent.split("*").join(".*") + "$"), max: c.max_classification }); } catch(e) {}`);
+  L(`    } else { _sfClearanceExact[c.agent] = c.max_classification; }`);
+  L(`  }`);
+  L(`})();`);
+  L(``);
+  L(`function _sfClassify(p) {`);
+  L(`  for (var i = 0; i < _sfClassRules.length; i++) {`);
+  L(`    if (_sfClassRules[i].re.test(p)) return _sfClassRules[i];`);
+  L(`  }`);
+  L(`  return { classification: "public", label: "Source code / general" };`);
+  L(`}`);
+  L(``);
+  L(`function _sfIsPathLike(s) {`);
+  L(`  if (!s || s.length < 2 || s.length > 500) return false;`);
+  L(`  return /^(?:\\/|\\.{0,2}\\/|~\\/|[a-zA-Z]:[\\\\/])/.test(s) || /\\.[a-zA-Z0-9]{1,10}$/.test(s);`);
+  L(`}`);
+  L(``);
+  L(`function _sfExtractPaths(toolName, toolInput) {`);
+  L(`  var paths = [];`);
+  L(`  if (!toolInput) return paths;`);
+  L(`  var obj = toolInput;`);
+  L(`  if (typeof toolInput === "string") { try { obj = JSON.parse(toolInput); } catch(e) { obj = null; } }`);
+  L(`  if (obj && typeof obj === "object") {`);
+  L(`    var pathKeys = ["file_path","filePath","path","file","target","source","destination","filename"];`);
+  L(`    (function scan(o, depth) {`);
+  L(`      if (!o || typeof o !== "object" || depth > 2) return;`);
+  L(`      for (var key in o) {`);
+  L(`        var val = o[key];`);
+  L(`        if (typeof val === "string") {`);
+  L(`          if (pathKeys.indexOf(key) !== -1 || _sfIsPathLike(val)) paths.push(val);`);
+  L(`        } else if (val && typeof val === "object" && !Array.isArray(val)) {`);
+  L(`          scan(val, depth + 1);`);
+  L(`        }`);
+  L(`      }`);
+  L(`    })(obj, 0);`);
+  L(`    if (SHELL_TOOLS.has(toolName) && typeof obj.command === "string") {`);
+  L(`      var tokens = obj.command.split(/\\s+/);`);
+  L(`      for (var t = 0; t < tokens.length; t++) {`);
+  L(`        var tok = _sfStripQuotes(tokens[t]);`);
+  L(`        if (_sfIsPathLike(tok)) paths.push(tok);`);
+  L(`      }`);
+  L(`    }`);
+  L(`  }`);
+  L(`  return paths;`);
+  L(`}`);
+  L(``);
+  L(`function _sfAgentMaxClassification(agentId) {`);
+  L(`  if (_sfClearanceExact.hasOwnProperty(agentId)) return _sfClearanceExact[agentId];`);
+  L(`  for (var i = 0; i < _sfClearanceWild.length; i++) {`);
+  L(`    if (_sfClearanceWild[i].re.test(agentId)) return _sfClearanceWild[i].max;`);
+  L(`  }`);
+  L(`  return DATA_BOUNDARY_DEFAULT_MAX;`);
+  L(`}`);
+  L(``);
+  L(`function evaluateDataBoundary(agentId, toolName, toolInput) {`);
+  L(`  if (!DATA_BOUNDARY_ENABLED) return { block: false, flag: false };`);
+  L(`  var paths = _sfExtractPaths(toolName, toolInput);`);
+  L(`  if (!paths.length) return { block: false, flag: false };`);
+  L(`  var highest = null, highestLevel = -1;`);
+  L(`  for (var i = 0; i < paths.length; i++) {`);
+  L(`    var c = _sfClassify(paths[i]);`);
+  L(`    var lvl = _sfClassLevel[c.classification];`);
+  L(`    if (lvl > highestLevel) { highestLevel = lvl; highest = { classification: c.classification, label: c.label, path: paths[i] }; }`);
+  L(`  }`);
+  L(`  if (!highest || highestLevel <= 0) return { block: false, flag: false };`); // public paths never trigger
+  L(`  var agentMax = _sfAgentMaxClassification(agentId);`);
+  L(`  var agentLevel = _sfClassLevel[agentMax] !== undefined ? _sfClassLevel[agentMax] : _sfClassLevel[DATA_BOUNDARY_DEFAULT_MAX];`);
+  L(`  if (highestLevel > agentLevel) {`);
+  L(`    var enforce = DATA_BOUNDARY_MODE === "enforce";`);
+  L(`    return { block: enforce, flag: true, reason: "Data boundary [" + highest.classification + "]: " + highest.label + " -- " + highest.path + " (agent clearance: " + agentMax + ")", id: "data_boundary" };`);
+  L(`  }`);
+  L(`  return { block: false, flag: false };`);
+  L(`}`);
+  L(``);
+
+  // ─── Identity / RBAC / environment policy ──────────────────────
+  const rolePrivilegesData = JSON.stringify(DEFAULT_ROLE_PRIVILEGES);
+  const toolPrivilegesData = JSON.stringify(DEFAULT_TOOL_PRIVILEGES);
+  const agentRolesData = JSON.stringify(identity.agentRoles);
+  const agentPrivilegesData = JSON.stringify(identity.agentPrivileges);
+
+  L(`// --- Identity / role-based access control / environment policy ---`);
+  L(`var IDENTITY_ENABLED = ${JSON.stringify(identity.enabled)};`);
+  L(`var IDENTITY_MODE = ${JSON.stringify(identity.enforcementMode)};`);
+  L(`var IDENTITY_DEFAULT_ROLE = ${JSON.stringify(identity.defaultRole)};`);
+  L(`var IDENTITY_DEFAULT_PRIVILEGE = ${JSON.stringify(identity.defaultPrivilege)};`);
+  L(`var IDENTITY_ENVIRONMENT = ${JSON.stringify(identity.environment)};`);
+  L(`var IDENTITY_EXTERNAL_FACING = ${JSON.stringify(identity.externalFacing)};`);
+  L(`var IDENTITY_AGENT_ROLES = ${agentRolesData};`);
+  L(`var IDENTITY_AGENT_PRIVILEGES = ${agentPrivilegesData};`);
+  L(`var _sfRolePrivileges = ${rolePrivilegesData};`);
+  L(`var _sfToolPrivileges = ${toolPrivilegesData};`);
+  L(``);
+  L(`function _sfResolvePrivilege(agentId) {`);
+  L(`  if (IDENTITY_AGENT_PRIVILEGES.hasOwnProperty(agentId)) return IDENTITY_AGENT_PRIVILEGES[agentId];`);
+  L(`  if (IDENTITY_AGENT_ROLES.hasOwnProperty(agentId)) {`);
+  L(`    var role = IDENTITY_AGENT_ROLES[agentId];`);
+  L(`    return _sfRolePrivileges.hasOwnProperty(role) ? _sfRolePrivileges[role] : IDENTITY_DEFAULT_PRIVILEGE;`);
+  L(`  }`);
+  L(`  return IDENTITY_DEFAULT_PRIVILEGE;`);
+  L(`}`);
+  L(``);
+  L(`function _sfResolveRole(agentId) {`);
+  L(`  return IDENTITY_AGENT_ROLES.hasOwnProperty(agentId) ? IDENTITY_AGENT_ROLES[agentId] : IDENTITY_DEFAULT_ROLE;`);
+  L(`}`);
+  L(``);
+  L(`function evaluateIdentity(agentId, toolName) {`);
+  L(`  if (!IDENTITY_ENABLED || !toolName) return { block: false, flag: false };`);
+  L(`  var enforce = IDENTITY_MODE === "enforce";`);
+  L(`  var role = _sfResolveRole(agentId);`);
+  L(`  var privilege = _sfResolvePrivilege(agentId);`);
+  L(`  var required = _sfToolPrivileges.hasOwnProperty(toolName) ? _sfToolPrivileges[toolName] : 1;`);
+  L(`  if (privilege < required) {`);
+  L(`    return { block: enforce, flag: true, reason: "RBAC: agent \\"" + agentId + "\\" (role: " + role + ", privilege: " + privilege + ") used tool \\"" + toolName + "\\" requiring privilege " + required, id: "role_based_access" };`);
+  L(`  }`);
+  L(`  if (IDENTITY_ENVIRONMENT === "production" && SHELL_TOOLS.has(toolName)) {`);
+  L(`    return { block: enforce, flag: true, reason: "Environment policy: tool \\"" + toolName + "\\" is blocked in production for agent \\"" + agentId + "\\"", id: "environment_policy" };`);
+  L(`  }`);
+  L(`  if (IDENTITY_EXTERNAL_FACING && (SHELL_TOOLS.has(toolName) || WRITE_TOOLS.has(toolName))) {`);
+  L(`    return { block: enforce, flag: true, reason: "Environment policy: external-facing agent \\"" + agentId + "\\" cannot use tool \\"" + toolName + "\\"", id: "environment_policy" };`);
+  L(`  }`);
+  L(`  return { block: false, flag: false };`);
+  L(`}`);
+  L(``);
+
+  // ─── Sequence detection (SQLite-backed session history) ────────
+  L(`// --- Sequence detection: multi-step attack chains via SQLite history ---`);
+  L(`// Each handler invocation is a fresh process (frameworks spawn one per`);
+  L(`// tool call), so in-memory sliding windows don't persist across calls.`);
+  L(`// History is reconstructed from the events table on every check instead.`);
+  L(`var SEQUENCE_ENABLED = ${JSON.stringify(sequenceDetection.enabled)};`);
+  L(`var SEQUENCE_MODE = ${JSON.stringify(sequenceDetection.enforcementMode)};`);
+  L(`var SEQUENCE_WINDOW_MINUTES = ${JSON.stringify(sequenceDetection.windowMinutes)};`);
+  L(`var SEQUENCE_WINDOW_MS = SEQUENCE_WINDOW_MINUTES * 60 * 1000;`);
+  L(`var SEQUENCE_MIN_CONFIDENCE = ${JSON.stringify(sequenceDetection.minConfidence)};`);
+  L(`var _sfSeqWriteTools = new Set(["Write","write","Edit","edit","MultiEdit","multiedit","Create","create","FileEdit","file_edit","create_file","write_file","edit_file"]);`);
+  L(`var _sfSeqReadTools = new Set(["Read","read","ReadFile","read_file","View","view","Cat","cat","ListDir","list_dir"]);`);
+  L(``);
+  L(`function _sfDetectScriptInjection(w) {`);
+  L(`  var current = w[w.length - 1];`);
+  L(`  if (!SHELL_TOOLS.has(current.tool_name)) return null;`);
+  L(`  var cmd = (current.input_summary || "").toLowerCase();`);
+  L(`  for (var i = w.length - 2; i >= 0; i--) {`);
+  L(`    var prev = w[i];`);
+  L(`    if (!SHELL_TOOLS.has(prev.tool_name)) continue;`);
+  L(`    var chmodMatch = (prev.input_summary || "").match(/chmod\\s+(?:\\+x|[0-7]*[1357][0-7]*)\\s+(\\S+)/);`);
+  L(`    if (!chmodMatch) continue;`);
+  L(`    var targetFile = chmodMatch[1];`);
+  L(`    if (cmd.indexOf(targetFile.toLowerCase()) === -1 && cmd.indexOf("./" + targetFile.toLowerCase().replace(/^\\.\\//, "")) === -1) continue;`);
+  L(`    for (var j = i - 1; j >= 0; j--) {`);
+  L(`      var wr = w[j];`);
+  L(`      var isWrite = _sfSeqWriteTools.has(wr.tool_name) || (SHELL_TOOLS.has(wr.tool_name) && /(?:>>?|tee)\\s/.test(wr.input_summary || ""));`);
+  L(`      if (!isWrite) continue;`);
+  L(`      if ((wr.input_summary || "").toLowerCase().indexOf(targetFile.toLowerCase()) !== -1) {`);
+  L(`        return { type: "script_injection", confidence: 0.92, description: "file \\"" + targetFile + "\\" was written, made executable, and executed within " + SEQUENCE_WINDOW_MINUTES + " min" };`);
+  L(`      }`);
+  L(`    }`);
+  L(`  }`);
+  L(`  return null;`);
+  L(`}`);
+  L(``);
+  L(`function _sfDetectDataExfiltration(w) {`);
+  L(`  var current = w[w.length - 1];`);
+  L(`  if (!SHELL_TOOLS.has(current.tool_name)) return null;`);
+  L(`  var cmd = current.input_summary || "";`);
+  L(`  if (!/\\b(curl|wget|fetch|http|requests\\.|nc\\b|netcat|scp\\b|ssh\\b)/i.test(cmd)) return null;`);
+  L(`  for (var i = w.length - 2; i >= 0; i--) {`);
+  L(`    var prev = w[i];`);
+  L(`    var isRead = _sfSeqReadTools.has(prev.tool_name) || (SHELL_TOOLS.has(prev.tool_name) && /\\b(cat|head|tail|less|more|grep)\\b/.test(prev.input_summary || ""));`);
+  L(`    if (!isRead) continue;`);
+  L(`    var readPath = prev.input_summary || "";`);
+  L(`    var isSensitive = false;`);
+  L(`    for (var k = 0; k < _sfSensitivePaths.length; k++) { if (_sfSensitivePaths[k].re.test(readPath)) { isSensitive = true; break; } }`);
+  L(`    if (!isSensitive && /\\.(env|pem|key|secret|credential|token|password)/i.test(readPath)) isSensitive = true;`);
+  L(`    if (!isSensitive && /\\/\\.(ssh|aws|gnupg)\\//i.test(readPath)) isSensitive = true;`);
+  L(`    if (isSensitive) {`);
+  L(`      return { type: "data_exfiltration", confidence: 0.85, description: "read of a sensitive path followed by outbound network call within " + SEQUENCE_WINDOW_MINUTES + " min" };`);
+  L(`    }`);
+  L(`  }`);
+  L(`  return null;`);
+  L(`}`);
+  L(``);
+  L(`function _sfDetectPersistenceProbe(w) {`);
+  L(`  var current = w[w.length - 1];`);
+  L(`  if (current.outcome !== "blocked") return null;`);
+  L(`  var blocked = w.filter(function(e) { return e.outcome === "blocked"; });`);
+  L(`  if (blocked.length < 3) return null;`);
+  L(`  var counts = {}, maxTool = "", maxCount = 0;`);
+  L(`  for (var i = 0; i < blocked.length; i++) {`);
+  L(`    var t = blocked[i].tool_name;`);
+  L(`    counts[t] = (counts[t] || 0) + 1;`);
+  L(`    if (counts[t] > maxCount) { maxCount = counts[t]; maxTool = t; }`);
+  L(`  }`);
+  L(`  if (maxCount < 3) return null;`);
+  L(`  var confidence = Math.min(0.95, 0.7 + (maxCount - 3) * 0.05);`);
+  L(`  return { type: "persistence_probe", confidence: confidence, description: maxCount + " blocked attempts on tool \\"" + maxTool + "\\" within " + SEQUENCE_WINDOW_MINUTES + " min" };`);
+  L(`}`);
+  L(``);
+  L(`function _sfDetectPrivilegeChain(w) {`);
+  L(`  var current = w[w.length - 1];`);
+  L(`  if (!SHELL_TOOLS.has(current.tool_name)) return null;`);
+  L(`  var cmd = (current.input_summary || "").toLowerCase();`);
+  L(`  var isReload = /\\b(source|reload|restart|systemctl|service\\s+\\S+\\s+(start|restart)|npm\\s+install|pip\\s+install)\\b/.test(cmd) || /\\.\\s+(\\.bashrc|\\.profile|\\.zshrc|\\.bash_profile)/.test(cmd);`);
+  L(`  if (!isReload) return null;`);
+  L(`  var privFiles = [/\\.ssh\\/authorized_keys/i, /sudoers/i, /\\.bashrc|\\.profile|\\.zshrc|\\.bash_profile/i, /\\.npmrc/i, /\\.netrc/i, /docker.*\\.json/i, /\\.kube\\/config/i, /\\.aws\\/credentials/i];`);
+  L(`  for (var i = w.length - 2; i >= 0; i--) {`);
+  L(`    var wr = w[i];`);
+  L(`    var isWrite = _sfSeqWriteTools.has(wr.tool_name) || (SHELL_TOOLS.has(wr.tool_name) && /(?:>>?|tee)\\s/.test(wr.input_summary || ""));`);
+  L(`    if (!isWrite) continue;`);
+  L(`    for (var p = 0; p < privFiles.length; p++) {`);
+  L(`      if (privFiles[p].test(wr.input_summary || "")) {`);
+  L(`        return { type: "privilege_chain", confidence: 0.88, description: "write to a privilege-granting file followed by reload/restart within " + SEQUENCE_WINDOW_MINUTES + " min" };`);
+  L(`      }`);
+  L(`    }`);
+  L(`  }`);
+  L(`  return null;`);
+  L(`}`);
+  L(``);
+  L(`function evaluateSequence(sessionId, currentToolName, currentSummary, currentOutcome) {`);
+  L(`  if (!SEQUENCE_ENABLED || !db || !sessionId) return { block: false, flag: false };`);
+  L(`  try {`);
+  L(`    var cutoff = new Date(Date.now() - SEQUENCE_WINDOW_MS).toISOString();`);
+  L(`    var rows = db.prepare("SELECT tool_name, tool_input_summary, outcome, ts FROM events WHERE session_id = ? AND ts >= ? ORDER BY ts ASC LIMIT 50").all(sessionId, cutoff);`);
+  L(`    var w = rows.map(function(r) { return { tool_name: r.tool_name || "", input_summary: r.tool_input_summary || "", outcome: r.outcome || "allowed" }; });`);
+  L(`    w.push({ tool_name: currentToolName || "", input_summary: currentSummary || "", outcome: currentOutcome || "allowed" });`);
+  L(`    var m = _sfDetectScriptInjection(w) || _sfDetectDataExfiltration(w) || _sfDetectPersistenceProbe(w) || _sfDetectPrivilegeChain(w);`);
+  L(`    if (!m || m.confidence < SEQUENCE_MIN_CONFIDENCE) return { block: false, flag: false };`);
+  L(`    var enforce = SEQUENCE_MODE === "enforce";`);
+  L(`    return { block: enforce, flag: true, reason: "Sequence [" + m.type + "]: " + m.description, id: "sequence_" + m.type };`);
+  L(`  } catch (e) { return { block: false, flag: false }; }`);
+  L(`}`);
   L(``);
 
   L(`// --- Enterprise Policy Evaluation ---`);
-  L(`function evaluatePolicy(toolName, toolInput) {`);
+  L(`function evaluatePolicy(toolName, toolInput, agentId) {`);
   L(`  if (TOOL_BLOCKLIST.has(toolName))`);
   L(`    return { block: true, flag: true, reason: "Tool \\"" + toolName + "\\" is in the blocklist", id: "tool_blocklist" };`);
   L(`  // Tool allowlist semantics: if allowlist is configured, deny everything not explicitly allowed.`);
@@ -288,6 +613,14 @@ export function generatePolicyEvaluationCode(enforcementMode: string): string {
   L(`      }`);
   L(`    }`);
   L(`  }`);
+  L(``);
+  L(`  // Data boundary classification (governs reads, not just writes)`);
+  L(`  var boundaryResult = evaluateDataBoundary(agentId, toolName, toolInput);`);
+  L(`  if (boundaryResult.block || boundaryResult.flag) return boundaryResult;`);
+  L(``);
+  L(`  // Identity / role-based access control / environment policy`);
+  L(`  var identityResult = evaluateIdentity(agentId, toolName);`);
+  L(`  if (identityResult.block || identityResult.flag) return identityResult;`);
   L(``);
   L(`  return { block: false, flag: false };`);
   L(`}`);

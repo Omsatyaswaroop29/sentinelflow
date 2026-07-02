@@ -61,6 +61,11 @@ import type { AgentEvent, ToolEventData, TokenUsage } from "@sentinelflow/core";
 import { BaseInterceptor } from "./base";
 import { generatePolicyEvaluationCode } from "./handler-codegen";
 import type {
+  DataBoundaryCodegenConfig,
+  IdentityCodegenConfig,
+  SequenceDetectionCodegenConfig,
+} from "./handler-codegen";
+import type {
   InterceptorConfig,
   PolicyProvider,
   EventListener,
@@ -130,6 +135,12 @@ export interface CopilotInterceptorConfig extends Partial<InterceptorConfig> {
   maxInputSummaryLength?: number;
   /** Name for the hooks JSON file. Default: "sentinelflow" → .github/hooks/sentinelflow.json */
   hooksFileName?: string;
+  /** Data boundary classification config (public/internal/restricted/system). Enabled+monitor by default. */
+  dataBoundary?: DataBoundaryCodegenConfig;
+  /** Identity/RBAC + environment policy config. Enabled+monitor by default. */
+  identity?: IdentityCodegenConfig;
+  /** Multi-step attack sequence detection config. Enabled+monitor by default. */
+  sequenceDetection?: SequenceDetectionCodegenConfig;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -158,6 +169,9 @@ export class CopilotInterceptor extends BaseInterceptor {
   private _maxInputLength: number;
   private _hooksFileName: string;
   private _originalHooksJson: string | null = null;
+  private _dataBoundary?: DataBoundaryCodegenConfig;
+  private _identity?: IdentityCodegenConfig;
+  private _sequenceDetection?: SequenceDetectionCodegenConfig;
 
   constructor(config: CopilotInterceptorConfig) {
     super(config);
@@ -172,6 +186,9 @@ export class CopilotInterceptor extends BaseInterceptor {
     this._egressBlockedDomains = [...(config.egressBlockedDomains ?? [])];
     this._maxInputLength = config.maxInputSummaryLength ?? DEFAULT_MAX_INPUT_LENGTH;
     this._hooksFileName = config.hooksFileName ?? "sentinelflow";
+    this._dataBoundary = config.dataBoundary;
+    this._identity = config.identity;
+    this._sequenceDetection = config.sequenceDetection;
   }
 
   // ─── Static Helpers ─────────────────────────────────────────
@@ -297,7 +314,11 @@ export class CopilotInterceptor extends BaseInterceptor {
    * Also: timestamp is a number (epoch ms) not ISO string.
    */
   private generateHandlerScript(): string {
-    const policyCode = generatePolicyEvaluationCode(this.enforcementMode);
+    const policyCode = generatePolicyEvaluationCode(this.enforcementMode, {
+      dataBoundary: this._dataBoundary,
+      identity: this._identity,
+      sequenceDetection: this._sequenceDetection,
+    });
 
     return `#!/usr/bin/env node
 /**
@@ -480,11 +501,17 @@ function summarizeToolArgs(toolName, parsedArgs) {
     switch (eventType) {
 
     case "preToolUse": {
+      const agentId = "copilot-agent";
       const toolName = input.toolName || "unknown";
       const parsedArgs = parseToolArgs(input.toolArgs);
       const inputSummary = summarizeToolArgs(toolName, parsedArgs);
 
-      const policy = evaluatePolicy(toolName, parsedArgs);
+      let policy = evaluatePolicy(toolName, parsedArgs, agentId);
+      const seq = evaluateSequence(sessionId, toolName, inputSummary, policy.block ? "blocked" : "allowed");
+      if (!policy.block) {
+        if (seq.block) policy = seq;
+        else if (seq.flag && !policy.flag) policy = seq;
+      }
       const isBlock = policy.block;
       const isFlag = !isBlock && policy.flag;
 
@@ -492,7 +519,7 @@ function summarizeToolArgs(toolName, parsedArgs) {
         isBlock ? "tool_call_blocked" : (isFlag ? "tool_call_flagged" : "tool_call_attempted"),
         isBlock ? "blocked" : "allowed",
         isBlock ? "high" : (isFlag ? "medium" : "info"),
-        { session_id: sessionId, tool_name: toolName, tool_input_summary: inputSummary,
+        { session_id: sessionId, agent_id: agentId, tool_name: toolName, tool_input_summary: inputSummary,
           action: inputSummary, policy_id: policy.id, reason: policy.reason,
           payload: { hook: "preToolUse", cwd: input.cwd } }
       ));

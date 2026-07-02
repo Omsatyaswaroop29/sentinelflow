@@ -160,8 +160,8 @@ export function extractPaths(event: AgentEvent): string[] {
 /** Simple heuristic: does this string look like a file path? */
 function isPathLike(s: string): boolean {
   if (!s || s.length < 2 || s.length > 500) return false;
-  // Starts with /, ./, ../, or looks like a relative path with extension
-  return /^(?:\/|\.{0,2}\/|[a-zA-Z]:[\\/])/.test(s) ||
+  // Starts with /, ./, ../, ~/, or looks like a relative path with extension
+  return /^(?:\/|\.{0,2}\/|~\/|[a-zA-Z]:[\\/])/.test(s) ||
     /\.[a-zA-Z0-9]{1,10}$/.test(s);
 }
 

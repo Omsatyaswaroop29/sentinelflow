@@ -1,6 +1,6 @@
 {
   "name": "@sentinelflow/interceptors",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Runtime interceptors for AI agent governance — hooks into Claude Code, Cursor, GitHub Copilot, and Codex CLI to enforce policies in real-time.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

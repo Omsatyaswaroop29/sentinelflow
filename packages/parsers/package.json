@@ -1,11 +1,13 @@
 {
   "name": "@sentinelflow/parsers",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Framework-specific agent configuration parsers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "license": "MIT",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

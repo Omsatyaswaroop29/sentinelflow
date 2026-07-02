@@ -13,7 +13,7 @@ cd ~/Downloads/sentinelflow
 pnpm build && pnpm test
 ```
 
-Expected outcome: all 5 packages build successfully and all tests pass (approximately 54 interceptor tests, 42 core tests, 79+ scanner tests).
+Expected outcome: all 5 packages build successfully and all tests pass (258 interceptor tests, 47 core tests, 84 scanner tests, 47 parsers tests, plus CLI tests -- 442 total).
 
 ---
 
@@ -226,7 +226,7 @@ rm -rf /tmp/sf-golden-test
 Copy this checklist and check off each item as you verify it:
 
 - [ ] `pnpm build` succeeds for all 5 packages
-- [ ] `pnpm test` passes all tests (54+ interceptor, 42 core, 79+ scanner)
+- [ ] `pnpm test` passes all tests (258 interceptor, 47 core, 84 scanner, 47 parsers)
 - [ ] `intercept install` creates `.claude/settings.local.json` with correct format
 - [ ] `intercept install` creates `.sentinelflow/handler.js`
 - [ ] Handler allows safe tool calls (exit 0)

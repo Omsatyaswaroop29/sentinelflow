@@ -140,6 +140,19 @@ if (!pkg.files) {
   if (files.includes("dist") && !files.includes("dist/bundle.js")) {
     warn("files includes 'dist' directory — consider narrowing to 'dist/bundle.js'");
   }
+
+  // Verify every declared entry actually resolves to a real file.
+  // npm silently DROPS missing "files" entries instead of failing the pack —
+  // this is exactly how README.md/LICENSE shipped missing from the tarball
+  // for several releases while this check only inspected the declared field.
+  for (const entry of files) {
+    const resolved = path.join(CLI_DIR, entry);
+    if (!fs.existsSync(resolved)) {
+      fail(`files entry "${entry}" does not exist at ${resolved} — npm pack will silently omit it`);
+    } else {
+      pass(`files entry "${entry}" resolves to a real file`);
+    }
+  }
 }
 
 // ─── 7. Check for source maps in dist ───────────────────────────

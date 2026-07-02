@@ -26,6 +26,7 @@ import {
   type ScanPreset,
   type SuppressionResult,
 } from "@sentinelflow/scanner";
+import { CLI_VERSION } from "../version";
 
 const VALID_FORMATS = ["terminal", "json", "md", "sarif"] as const;
 const VALID_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -98,7 +99,7 @@ export async function scanCommand(
     // ── Handle Empty Scans ────────────────────────────────
     if (result.frameworks.length === 0 && format === "terminal") {
       console.log(`
-  \x1b[36m\x1b[1mSentinelFlow v0.2.0\x1b[0m — Agent Governance Scanner
+  \x1b[36m\x1b[1mSentinelFlow v${CLI_VERSION}\x1b[0m — Agent Governance Scanner
 
   Scanning ${rootDir}...
 
@@ -164,7 +165,7 @@ export async function scanCommand(
         break;
       case "terminal":
       default:
-        console.log(formatTerminal(result));
+        console.log(formatTerminal(result, { version: CLI_VERSION }));
         break;
     }
 
