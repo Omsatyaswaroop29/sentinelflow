@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/sentinelflow)](https://www.npmjs.com/package/sentinelflow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-228%2B%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-442%2B%20passing-brightgreen)](#validated-against-real-projects)
 [![Frameworks](https://img.shields.io/badge/frameworks-4%20live-blue)](#frameworks-supported)
 
 **The governance platform for AI agents.** Scans Claude Code, Cursor, GitHub Copilot, Codex, LangChain, CrewAI, and Kiro configurations for security misconfigurations — and intercepts dangerous tool calls at runtime before they execute.
@@ -18,7 +18,7 @@ npx sentinelflow intercept install . --framework copilot --mode enforce
 ```
 
 ```
-  SentinelFlow v0.4.0 — Agent Governance Scanner
+  SentinelFlow v0.5.0 — Agent Governance Scanner
 
   Frameworks detected:
     ✓ Claude Code
@@ -41,6 +41,37 @@ npx sentinelflow intercept install . --framework copilot --mode enforce
   │            .codex/config.toml:2                         │
   └────────────────────────────────────────────────────────┘
 ```
+
+### I want to&hellip;
+
+| Goal | Run this |
+|---|---|
+| Find misconfigurations before merge | `npx sentinelflow scan . --format sarif > results.sarif` |
+| Adopt gradually without breaking CI | `npx sentinelflow scan . --preset monitor` |
+| Block dangerous tool calls live | `sentinelflow intercept install . --mode enforce` |
+| See what got blocked, and why | `sentinelflow events blocked .` |
+| Catch multi-step attack chains | automatic once runtime hooks are installed — see [Sequence Detection](#advanced-governance) |
+| Track token spend by agent | `sentinelflow costs . --window 7d` |
+| Suppress a finding with an audit trail | see [Suppression](#suppression) |
+
+### Contents
+
+[Why SentinelFlow?](#why-sentinelflow) &nbsp;·&nbsp;
+[What It Finds](#what-it-finds) &nbsp;·&nbsp;
+[Installation](#installation) &nbsp;·&nbsp;
+[Quickstart](#quickstart) &nbsp;·&nbsp;
+[Scan Presets](#scan-presets) &nbsp;·&nbsp;
+[Suppression](#suppression) &nbsp;·&nbsp;
+[Runtime Agent Firewall](#runtime-agent-firewall-phase-2-beta) &nbsp;·&nbsp;
+[Advanced Governance](#advanced-governance) &nbsp;·&nbsp;
+[Cost Visibility](#cost-visibility) &nbsp;·&nbsp;
+[Frameworks Supported](#frameworks-supported) &nbsp;·&nbsp;
+[Compliance Mappings](#compliance-mappings) &nbsp;·&nbsp;
+[Architecture](#architecture) &nbsp;·&nbsp;
+[Built With](#built-with) &nbsp;·&nbsp;
+[Validated Against Real Projects](#validated-against-real-projects) &nbsp;·&nbsp;
+[Contributing](#contributing) &nbsp;·&nbsp;
+[Roadmap](#roadmap)
 
 ---
 
@@ -389,7 +420,56 @@ Every new governance rule goes through a six-step closed loop: parser engineer �
 
 ## Validated Against Real Projects
 
-**Static scanner — Everything Claude Code (116k+ stars).** Cold-scanned in 32ms: 30 agents discovered, 133 findings across 35 critical, 30 high, and 64 medium severities. [Project link](https://github.com/affaan-m/everything-claude-code).
+SentinelFlow is dogfooded against real, actively-maintained agent repositories — not synthetic fixtures — before every release.
+
+<details open>
+<summary><strong>ECC (ecc.tools)</strong> — 129 agents across 4 frameworks detected in one pass, 868ms <em>(tested 2026-07-02)</em></summary>
+
+<br>
+
+[`affaan-m/ECC`](https://github.com/affaan-m/ECC) is a large, actively-maintained "agent harness" project — Discord community, GitHub App, published npm packages (`ecc-universal`, `ecc-agentshield`) — with 67 Claude Code subagents plus Cursor rules, Codex/OpenCode config, and Kiro steering docs. It's a good stress test for multi-framework auto-detection in a single scan.
+
+```text
+$ npx sentinelflow scan .
+
+Frameworks detected:  Claude Code, Cursor, Codex / OpenCode, Kiro
+Agents discovered:    129
+Scan time:            868ms
+
+Findings: 66 critical, 132 high, 265 medium, 8 low   (471 total)
+```
+
+| Rule | Finding | Severity | Count |
+|---|---|:-:|:-:|
+| `SF-AC-008` | Agent has no declared owner | medium | 129 |
+| `SF-CG-001` | No token budget configured | medium | 129 |
+| `SF-AC-002` | Agent permissions exceed least privilege | high | 67 |
+| `SF-AC-005` | No human-in-the-loop for high-impact actions | high | 54 |
+| `SF-DG-003` | Unrestricted file system write access | critical | 30 |
+| `SF-AC-007` | Agent can escalate its own privileges | critical | 28 |
+| `SF-CG-004` | Expensive model used without routing strategy | low | 8 |
+| `SF-AC-001` | Hardcoded credentials in agent configuration | critical | 7 |
+| `SF-PI-005` | No output validation before tool execution | high | 7 |
+| `SF-PI-002` | System prompt contains sensitive data | high | 4 |
+| `SF-NS-003` | No network egress filtering for agent environment | medium | 2 |
+| 6 more rules | `SF-FC-001`, `SF-SC-008`, `SF-MA-006`, `SF-MA-008`, `SF-AL-004`, `SF-CD-001` — 1 hit each | mixed | 6 |
+
+**What held up:** the structural findings — unrestricted write access, self-privilege-escalation, missing owners, no token budgets, permissions exceeding least privilege — accurately reflect real properties of a repo that auto-generates dozens of specialized subagents. None of that is noise, and it's exactly the signal a repo like this needs before shipping more agents.
+
+**What we're disclosing, not hiding:** spot-checking the seven `SF-AC-001` (hardcoded credential) hits found 2 were documentation examples, not live secrets — one a "BAD vs GOOD" code-smell teaching snippet inside an agent's own review instructions, the other a `.env.example`-style template (`postgresql://user:password@localhost/mydb`). This is a known limitation of every regex-based secret scanner, not something specific to SentinelFlow — it's the same reason this repo ships its own `.gitleaksignore` — but treat `SF-AC-001` hits as "investigate," not "assume breach." We also noticed `SF-AC-007` findings don't currently carry a file/line location the way most other rules do; that's a real gap we're tracking as a fix, not something we're smoothing over here.
+
+</details>
+
+<details>
+<summary><strong>Everything Claude Code</strong> (116k+ stars) — 30 agents, 133 findings, 32ms</summary>
+
+<br>
+
+Cold-scanned in 32ms: 30 agents discovered, 133 findings across 35 critical, 30 high, and 64 medium severities. [Project link](https://github.com/affaan-m/everything-claude-code).
+
+</details>
+
+<br>
 
 **Runtime interception — Claude Code v2.1.91, live session.** The generated handler script successfully blocked `rm -rf /home/user/important-data`; the model received the block reason through the hook contract and acknowledged the policy restriction in its next response.
 
