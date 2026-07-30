@@ -64,11 +64,25 @@ export class ClaudeCodeParser implements FrameworkParser {
   readonly markers = [".claude", "CLAUDE.md", "AGENTS.md"];
 
   async detect(rootDir: string): Promise<boolean> {
-    return (
+    // Original signals: .claude/ dir, CLAUDE.md, AGENTS.md.
+    if (
       fs.existsSync(path.join(rootDir, ".claude")) ||
       fs.existsSync(path.join(rootDir, "CLAUDE.md")) ||
       fs.existsSync(path.join(rootDir, "AGENTS.md"))
-    );
+    ) return true;
+
+    // NEW: also detect repos whose entire purpose is a collection of agent
+    // definition files stored in a root-level `agents/` directory (e.g.
+    // furai/claude-code-subagents, iannuttall/claude-agents). These repos
+    // have no .claude/ dir because they are MEANT to be copied INTO one
+    // -- but they are 100% Claude Code agent content and must be scanned.
+    const agentsDir = path.join(rootDir, "agents");
+    if (fs.existsSync(agentsDir) && fs.statSync(agentsDir).isDirectory()) {
+      const files = fs.readdirSync(agentsDir);
+      if (files.some((f) => f.endsWith(".md"))) return true;
+    }
+
+    return false;
   }
 
   async parse(rootDir: string): Promise<ParseResult> {
@@ -208,7 +222,130 @@ export class ClaudeCodeParser implements FrameworkParser {
     }
   }
 
-  // ─── Private: Parse agents/ directory ───────────────────────
+  // ─── Private: Find all `agents/` directories anywhere under rootDir ──
+  //
+  // Walks rootDir looking for directories literally named `agents` at any
+  // depth. This handles wshobson-style repos where agents live under
+  // plugins/*/agents/ rather than at the conventional rootDir/agents/.
+  // We cap depth and skip known non-source dirs to stay fast.
+  private findAgentsDirs(
+    dir: string,
+    found: string[],
+    depth: number = 0
+  ): void {
+    if (depth > 5) return;
+
+    const SKIP = new Set([
+      "node_modules", ".git", ".cache", "dist", "build", "coverage",
+      "__pycache__", ".turbo", ".next", "references", "docs", "assets",
+    ]);
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch { return; }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (SKIP.has(entry.name.toLowerCase()) || entry.name.startsWith(".")) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.name.toLowerCase() === "agents") {
+        found.push(fullPath);
+        // Don't recurse into an agents/ dir — its contents are files, not
+        // nested agents/ dirs. collectAgentFilesRecursive handles the files.
+      } else {
+        this.findAgentsDirs(fullPath, found, depth + 1);
+      }
+    }
+  }
+
+  // ─── Private: Is this .md file an agent definition? ─────────
+  //
+  // This is the guard against over-discovery. When we recurse into `agents/`
+  // subtrees we find a mix of real agent definitions AND supporting files
+  // (README.md, SKILL.md, commands/*.md, references/*.md, ARCHITECTURE.md).
+  // Only the former should be parsed as agents.
+  //
+  // Allow heuristic: the file is under an `agents/` path segment.
+  // Deny heuristic: the filename or parent directory matches a known
+  // non-agent pattern.
+  //
+  // This is deliberately conservative: when uncertain, we include the file
+  // (a false-positive agent is less harmful than a false-negative miss).
+  // The deny list targets only high-confidence non-agent names.
+  private isAgentFile(filePath: string): boolean {
+    const fileName = path.basename(filePath).toLowerCase();
+    const dirName = path.dirname(filePath).toLowerCase();
+
+    // ── Deny list: known non-agent filenames ─────────────────
+    const DENY_FILENAMES = new Set([
+      "readme.md", "architecture.md", "contributing.md", "changelog.md",
+      "license.md", "workflow_config.md", "workflows.md", "soul.md",
+      "sponsoring.md", "sponsors.md", "troubleshooting.md", "security.md",
+      "rules.md", "agents.md", "claude.md",
+      // wshobson-specific support files:
+      "skill.md", "details.md",
+    ]);
+    if (DENY_FILENAMES.has(fileName)) return false;
+
+    // ── Deny list: known non-agent parent directories ────────
+    const DENY_DIRS = ["commands", "references", "skills", "docs", "examples"];
+    if (DENY_DIRS.some((d) => dirName.includes(`/${d}/`) || dirName.endsWith(`/${d}`))) {
+      return false;
+    }
+
+    return true;
+  }
+
+  // ─── Private: Recursively collect agent .md files ──────────
+  //
+  // Walks all `agents/` subdirectories anywhere under rootDir, collecting
+  // files that pass isAgentFile(). This handles three layouts we've seen:
+  //   1. flat:     agents/actix-expert.md          (furai)
+  //   2. category: data-ai/ml-engineer.md          (rshah — rootDir IS the agents tree)
+  //   3. nested:   plugins/ui-design/agents/*.md   (wshobson)
+  //
+  // It does NOT walk the entire rootDir blindly — only paths that contain
+  // an `agents/` segment, OR the rootDir itself when it IS an agents collection
+  // (detected because it has CLAUDE.md / AGENTS.md alongside agent .md files).
+  private collectAgentFilesRecursive(
+    dir: string,
+    agentFiles: string[],
+    depth: number = 0
+  ): void {
+    // Safety cap: never recurse more than 6 levels deep.
+    if (depth > 6) return;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const SKIP_DIRS = new Set([
+      "node_modules", ".git", ".cache", "dist", "build", "coverage",
+      "__pycache__", ".turbo", ".next", "commands", "references",
+      "skills", "docs", "examples", "assets",
+    ]);
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+        this.collectAgentFilesRecursive(fullPath, agentFiles, depth + 1);
+      } else if (
+        entry.isFile() &&
+        (entry.name.endsWith(".md") || entry.name.endsWith(".yaml") || entry.name.endsWith(".yml")) &&
+        this.isAgentFile(fullPath)
+      ) {
+        agentFiles.push(fullPath);
+      }
+    }
+  }
+
+  // ─── Private: Parse agents/ directory (now recursive) ───────
 
   private parseAgentsDirectory(
     rootDir: string,
@@ -216,16 +353,69 @@ export class ClaudeCodeParser implements FrameworkParser {
     configFiles: ConfigFile[],
     warnings: string[]
   ): void {
-    const agentsDir = path.join(rootDir, "agents");
-    const files = safeListDir(agentsDir, [".md", ".yaml", ".yml"]);
+    // Collect all agent files by recursively walking two sources:
+    // (a) the conventional `rootDir/agents/` directory, and
+    // (b) the full rootDir when it IS an agent-collection repo (i.e. the .md
+    //     files live directly in category subfolders at the root, like rshah).
+    //
+    // To avoid scanning ALL .md files in every project (too broad), we restrict
+    // the full-rootDir walk to repos that look like agent collections: they have
+    // an `agents/` dir OR their root contains category-style subdirs with .md.
+    // In practice, the detect() guard already filtered for this pattern.
 
-    for (const file of files) {
-      const filePath = path.join(agentsDir, file);
+    const agentFiles: string[] = [];
+
+    // (a) Find ALL `agents/` directories anywhere under rootDir — covers:
+    //   - conventional:  rootDir/agents/          (flat, furai-style)
+    //   - nested:        plugins/*/agents/         (wshobson-style)
+    //   - .claude:       .claude/agents/           (standard)
+    // findAgentsDirs walks rootDir looking for any dir literally named
+    // `agents`, then collectAgentFilesRecursive gathers the .md files inside.
+    const agentsDirs: string[] = [];
+    this.findAgentsDirs(rootDir, agentsDirs);
+    for (const dir of agentsDirs) {
+      this.collectAgentFilesRecursive(dir, agentFiles);
+    }
+
+    // (b) For rshah-style repos: agents live in category subdirs at the root
+    //     (data-ai/, security/, research/ …) with no intermediate `agents/`
+    //     path segment. We only trigger this walk when there is NO `.claude/`
+    //     dir and NO `agents/` dir — meaning the whole repo IS the agent tree.
+    const hasClaudeDir = fs.existsSync(path.join(rootDir, ".claude"));
+    const hasAgentsDir = agentsDirs.length > 0;
+    if (!hasClaudeDir && !hasAgentsDir) {
+      // rootDir is itself an agent-collection repo. Walk it, but stay shallow
+      // (depth 2) to avoid crawling unrelated subtrees if any exist.
+      const topLevelDirs = (() => {
+        try {
+          return fs.readdirSync(rootDir, { withFileTypes: true })
+            .filter((e) => e.isDirectory())
+            .map((e) => path.join(rootDir, e.name));
+        } catch { return []; }
+      })();
+
+      const SKIP_ROOTS = new Set([
+        "node_modules", ".git", ".cache", "dist", "build",
+        "__pycache__", ".turbo", ".next",
+      ]);
+
+      for (const subDir of topLevelDirs) {
+        const name = path.basename(subDir).toLowerCase();
+        if (SKIP_ROOTS.has(name) || name.startsWith(".")) continue;
+        this.collectAgentFilesRecursive(subDir, agentFiles, 0);
+      }
+    }
+
+    // De-duplicate (in case two walk paths found the same file).
+    const seen = new Set<string>();
+    for (const filePath of agentFiles) {
+      if (seen.has(filePath)) continue;
+      seen.add(filePath);
+
       const content = safeReadFile(filePath);
       if (content === null) continue;
 
       configFiles.push({ path: filePath, content, framework: "claude-code" });
-
       const agent = this.parseAgentMarkdown(content, filePath, warnings);
       if (agent) agents.push(agent);
     }
