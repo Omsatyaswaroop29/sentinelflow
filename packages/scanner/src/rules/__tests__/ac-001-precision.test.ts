@@ -100,8 +100,12 @@ describe("SF-AC-001 precision — real secrets still caught", () => {
   });
 
   it("flags a hardcoded password that is not an obvious placeholder", () => {
-    const f = scan([file("agents/svc.md", `password: "Tr0ub4dor&3xK"`)]);
+    const f = scan([file("agents/svc.md", `password: "Wq7rZ9kLmP2xY"`)]);
     expect(f.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("isPlaceholderSecret does NOT suppress that real password", () => {
+    expect(isPlaceholderSecret("Wq7rZ9kLmP2xY")).toBe(false);
   });
 });
 
@@ -130,6 +134,63 @@ describe("isPlaceholderSecret", () => {
   });
   it("does NOT flag a real AWS key id", () => {
     expect(isPlaceholderSecret("AKIA1B2C3D4E5F6G7H8I")).toBe(false);
+  });
+});
+
+// ─── False-NEGATIVE guards: aggressive suppression must NOT hide real secrets ───
+//
+// The dangerous failure mode of a precision fix is over-correcting so that a
+// real secret which merely *contains* a placeholder-ish substring (foo, bar,
+// test, a run of repeats) gets silently ignored. A missed real leak is worse
+// than a false alarm. These assert the whole-token matching holds the line.
+
+describe("SF-AC-001 — real secrets containing placeholder-ish substrings STILL fire", () => {
+  it("flags a real AWS key that contains the substring FOO", () => {
+    // AKIA + exactly 16 upper/digit chars; embeds FOO — must NOT be suppressed.
+    // (FOO12345QSTUVWXY = 16 chars.)
+    const f = scan([file("agents/x.md", `key = "AKIAFOO12345QSTUVWXY"`)]);
+    expect(f.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flags a real-format key containing TEST as a substring", () => {
+    const realish = "sk-ant-" + "aTESTb9c2".repeat(10); // 90 chars, embeds 'test'
+    const f = scan([file("agents/x.md", `ANTHROPIC_API_KEY=${realish}`)]);
+    expect(f.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flags a real secret containing a 4-char repeat run (7777)", () => {
+    const realish = "sk-" + "aB3d7777eF9gH2jK".repeat(2); // repeats by chance, not a mask
+    const f = scan([file("agents/x.md", `api_key: "${realish}"`)]);
+    expect(f.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flags a real internal DB connection string (@db, @host with a real password)", () => {
+    const f = scan([file("agents/x.md",
+      `DATABASE_URL=postgresql://admin:Xk9f2QpL7wZ@db:5432/production`)]);
+    expect(f.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("isPlaceholderSecret — false-negative regression guards", () => {
+  it("does NOT treat a long real key as a placeholder just for containing 'foo'", () => {
+    expect(isPlaceholderSecret("AKIAFOO12345QSTUVWXY")).toBe(false);
+  });
+  it("does NOT suppress a key with a chance 4-char repeat", () => {
+    expect(isPlaceholderSecret("aB3d7777eF9gH2jKaB3d7777eF9gH2jK")).toBe(false);
+  });
+  it("does NOT suppress a real password just because 'test' appears mid-string", () => {
+    expect(isPlaceholderSecret("Wq7testWithEntropy93x")).toBe(false);
+  });
+  it("STILL suppresses when the whole value is a dictionary token", () => {
+    expect(isPlaceholderSecret("test")).toBe(true);
+    expect(isPlaceholderSecret("foo")).toBe(true);
+    expect(isPlaceholderSecret("mypassword123")).toBe(true);
+  });
+  it("STILL suppresses a dictionary token inside a dashed placeholder", () => {
+    expect(isPlaceholderSecret("sk-proj-xxxxx")).toBe(true);
+  });
+  it("does NOT suppress a real internal-service DB URL with a real password", () => {
+    expect(isPlaceholderSecret("postgresql://admin:Xk9f2QpL7wZ@db:5432/production")).toBe(false);
   });
 });
 

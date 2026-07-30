@@ -42,6 +42,26 @@ function maskSecret(s: string): string {
 }
 
 /**
+ * Extract the actual secret VALUE from a raw regex match.
+ *
+ * Several SECRET_PATTERNS match a whole `key: "value"` assignment, so match[0]
+ * looks like `password: "Wq7rZ9kLmP2xY"` — the key word (`password`, `secret`,
+ * `token`) is part of the match. If we hand that whole string to the precision
+ * guards, the KEY word itself (which is in FAKE_TOKENS) makes the guard treat a
+ * real secret as a placeholder and suppress it. So before guarding, pull out
+ * the quoted value if there is one; otherwise fall back to the whole match
+ * (patterns like AKIA... / sk-... match the bare secret already).
+ */
+function extractSecretValue(rawMatch: string): string {
+  const quoted = rawMatch.match(/["']([^"']+)["']/);
+  if (quoted && quoted[1]) return quoted[1];
+  // Unquoted `key=value` form (e.g. AWS_SECRET=...): take the part after : or =.
+  const assigned = rawMatch.match(/[:=]\s*(.+)$/);
+  if (assigned && assigned[1]) return assigned[1].trim();
+  return rawMatch;
+}
+
+/**
  * Returns true when a matched "secret" is obviously a placeholder or teaching
  * example rather than a live credential. This is the single biggest driver of
  * false positives for SF-AC-001: docs, security guides, and .env examples are
@@ -55,7 +75,11 @@ export function isPlaceholderSecret(value: string): boolean {
   const v = value.toLowerCase();
 
   // Local / non-routable / documentation hosts in a connection string.
-  if (/(?:@|\/\/)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1|example\.com|host|db|your-host)\b/.test(v)) {
+  // NOTE: bare `host` and `db` were removed deliberately — they are common
+  // real service names (e.g. Docker Compose `@db:5432`), so suppressing them
+  // would hide real internal-credential leaks (a false negative). Only keep
+  // hosts that are unambiguously non-production.
+  if (/(?:@|\/\/)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1|example\.com|example\.org|your-host|your_host|hostname|<[^>]+>)\b/.test(v)) {
     return true;
   }
 
@@ -65,17 +89,42 @@ export function isPlaceholderSecret(value: string): boolean {
   // Structural placeholder markers: <KEY>, {{key}}, ${ENV}, ellipsis.
   if (/[<>{}]|\$\{|\.\.\./.test(value)) return true;
 
-  // Runs of the same character (xxxx, *****, aaaa, ....) — masking, not secrets.
-  if (/(.)\1{3,}/.test(v)) return true;
+  // A run of the SAME character that dominates the value (xxxxxxxx, 00000000).
+  // Tightened from {3,} to a dominant-run test: a real 40–80 char base64/hex
+  // secret can contain 4 repeated chars BY CHANCE, so the old /(.)\1{3,}/
+  // suppressed real secrets. Require either a long run (6+) or that a single
+  // repeated char makes up most of a short value.
+  const longRun = /(.)\1{5,}/.test(v);
+  const dominatedByRun = v.length <= 24 && /(.)\1{3,}/.test(v);
+  if (longRun || dominatedByRun) return true;
 
-  // Obvious fake tails / dictionary placeholders anywhere in the value.
-  const FAKE_TOKENS = [
-    "xxxx", "abc123", "changeme", "change_me", "your_", "your-", "yourkey",
-    "placeholder", "redacted", "example", "sample", "dummy", "fake", "test",
-    "foobar", "foo", "bar", "baz", "mypassword", "password123", "secret123",
-    "hunter2", "123456", "todo", "replace",
-  ];
-  if (FAKE_TOKENS.some((t) => v.includes(t))) return true;
+  // Dictionary placeholders. CRITICAL: match these as WHOLE TOKENS, not as
+  // substrings of a longer high-entropy value — otherwise a real key that
+  // merely *contains* "foo"/"bar"/"test" (common by chance in 40+ char random
+  // strings) gets silently suppressed. That false negative is worse than the
+  // false positive we're preventing. So: split the value into word-tokens and
+  // require an exact token match (or a very short whole value).
+  const FAKE_TOKENS = new Set([
+    "xxxx", "xxxxx", "abc123", "changeme", "change_me", "yourkey", "your_key",
+    "your_api_key", "placeholder", "redacted", "example", "sample", "dummy",
+    "fake", "test", "foobar", "foo", "bar", "baz", "mypassword", "password",
+    "password123", "secret", "secret123", "hunter2", "123456", "todo",
+    "replace", "replaceme",
+  ]);
+  const PREFIX_TOKENS = ["your_", "your-", "my_", "my-"];
+
+  // Split on non-alphanumeric boundaries so `sk-proj-xxxxx` → [sk, proj, xxxxx].
+  const tokens = v.split(/[^a-z0-9]+/).filter(Boolean);
+  if (tokens.some((t) => FAKE_TOKENS.has(t))) return true;
+  if (PREFIX_TOKENS.some((p) => v.startsWith(p))) return true;
+
+  // Very short whole values that are obvious fakes (e.g. the entire value is
+  // "test123" / "mypassword123"): treat a short value made only of a dictionary
+  // word + trailing digits as a placeholder.
+  if (v.length <= 16 && /^[a-z]+\d*$/.test(v)) {
+    const wordPart = v.replace(/\d+$/, "");
+    if (FAKE_TOKENS.has(wordPart)) return true;
+  }
 
   return false;
 }
@@ -130,7 +179,12 @@ export const hardcodedCredentials: ScanRule = {
           // Precision guards: skip obvious placeholders and teaching examples.
           // A secrets scanner that flags `sk-proj-xxxxx` or `// BAD` snippets as
           // critical leaks gets uninstalled on day one — precision is the product.
-          if (isPlaceholderSecret(match[0])) continue;
+          // IMPORTANT: guard on the extracted VALUE, not match[0]. Patterns like
+          // `password: "..."` include the key word in match[0]; passing that to
+          // isPlaceholderSecret would let the key word `password`/`secret`/`token`
+          // (all in FAKE_TOKENS) wrongly suppress a real secret.
+          const secretValue = extractSecretValue(match[0]);
+          if (isPlaceholderSecret(secretValue)) continue;
           if (isInExampleContext(file.content, match.index)) continue;
 
           const line = file.content.substring(0, match.index).split("\n").length;
