@@ -41,6 +41,71 @@ function maskSecret(s: string): string {
   return s.substring(0, 4) + "****" + s.substring(s.length - 4);
 }
 
+/**
+ * Returns true when a matched "secret" is obviously a placeholder or teaching
+ * example rather than a live credential. This is the single biggest driver of
+ * false positives for SF-AC-001: docs, security guides, and .env examples are
+ * full of fake values like `sk-proj-xxxxx`, `user:password@localhost`, and
+ * `mypassword123`. Flagging those as critical leaks destroys trust in the rule.
+ *
+ * Kept deliberately conservative — every entry here is a value no real
+ * production credential would take, so the false-negative risk is low.
+ */
+export function isPlaceholderSecret(value: string): boolean {
+  const v = value.toLowerCase();
+
+  // Local / non-routable / documentation hosts in a connection string.
+  if (/(?:@|\/\/)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1|example\.com|host|db|your-host)\b/.test(v)) {
+    return true;
+  }
+
+  // The universal "put your credentials here" placeholder pair.
+  if (/\buser:password@/.test(v) || /:\/\/user:pass\b/.test(v)) return true;
+
+  // Structural placeholder markers: <KEY>, {{key}}, ${ENV}, ellipsis.
+  if (/[<>{}]|\$\{|\.\.\./.test(value)) return true;
+
+  // Runs of the same character (xxxx, *****, aaaa, ....) — masking, not secrets.
+  if (/(.)\1{3,}/.test(v)) return true;
+
+  // Obvious fake tails / dictionary placeholders anywhere in the value.
+  const FAKE_TOKENS = [
+    "xxxx", "abc123", "changeme", "change_me", "your_", "your-", "yourkey",
+    "placeholder", "redacted", "example", "sample", "dummy", "fake", "test",
+    "foobar", "foo", "bar", "baz", "mypassword", "password123", "secret123",
+    "hunter2", "123456", "todo", "replace",
+  ];
+  if (FAKE_TOKENS.some((t) => v.includes(t))) return true;
+
+  return false;
+}
+
+const EXAMPLE_CONTEXT_MARKERS = [
+  "// bad", "//bad", "# bad", "#bad", "<!-- bad", "❌", "🚫", "✗",
+  "don't", "dont", "do not", "never", "avoid",
+  "example", "e.g.", "eg:", "for instance", "wrong", "incorrect",
+  "instead of", "anti-pattern", "antipattern", "bad:", "bad practice",
+];
+
+/**
+ * Returns true when the matched line — or the line immediately above it — is
+ * marked as a teaching / "don't do this" example. Catches cases like
+ * `const apiKey = "sk-abc123"; // BAD` where the value looks real-ish but the
+ * surrounding text makes clear it is an illustration, not a live secret.
+ */
+export function isInExampleContext(content: string, matchIndex: number): boolean {
+  const before = content.substring(0, matchIndex);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const prevLineStart = before.lastIndexOf("\n", lineStart - 2) + 1;
+  const lineEndIdx = content.indexOf("\n", matchIndex);
+  const currentLine = content
+    .substring(lineStart, lineEndIdx === -1 ? content.length : lineEndIdx)
+    .toLowerCase();
+  const prevLine = content.substring(prevLineStart, lineStart).toLowerCase();
+  const haystack = prevLine + "\n" + currentLine;
+  return EXAMPLE_CONTEXT_MARKERS.some((m) => haystack.includes(m));
+}
+
 export const hardcodedCredentials: ScanRule = {
   id: "SF-AC-001",
   name: "Hardcoded Credentials in Agent Configuration",
@@ -62,6 +127,12 @@ export const hardcodedCredentials: ScanRule = {
         pattern.lastIndex = 0;
         let match: RegExpExecArray | null;
         while ((match = pattern.exec(file.content)) !== null) {
+          // Precision guards: skip obvious placeholders and teaching examples.
+          // A secrets scanner that flags `sk-proj-xxxxx` or `// BAD` snippets as
+          // critical leaks gets uninstalled on day one — precision is the product.
+          if (isPlaceholderSecret(match[0])) continue;
+          if (isInExampleContext(file.content, match.index)) continue;
+
           const line = file.content.substring(0, match.index).split("\n").length;
           findings.push(createEnterpriseFinding(this, {
             id: `${this.id}-${counter++}`,
@@ -227,7 +298,7 @@ export const noOwner: ScanRule = {
           `often don't know how many agents exist or who owns them — this is the governance gap.`,
         recommendation:
           "Add an owner field to the agent definition or register it with: " +
-          "sentinelflow registry update <id> --owner <name>",
+          "sentinelflow registry update <id> --owner <n>",
         agent_id: agent.id, agent_name: agent.name, framework: agent.framework,
         location: agent.source_file ? { file: agent.source_file } : undefined,
         remediation_effort: "low",

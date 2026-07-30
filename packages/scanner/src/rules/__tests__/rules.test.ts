@@ -99,8 +99,11 @@ describe("Prompt Injection Rules", () => {
 
 describe("Access Control Rules", () => {
   it("SF-AC-001: detects AWS access keys", () => {
+    // Real-format key. NOTE: AWS's own doc placeholder `AKIAIOSFODNN7EXAMPLE`
+    // is now correctly IGNORED by the precision guard (it ends in EXAMPLE) —
+    // see ac-001-precision.test.ts. Use a non-placeholder value here.
     const findings = evalRule("SF-AC-001", ctx([], [
-      file("settings.json", '{ "key": "AKIAIOSFODNN7EXAMPLE" }'),
+      file("settings.json", '{ "key": "AKIA1B2C3D4E5F6G7H8I" }'),
     ]));
     expect(findings.length).toBeGreaterThanOrEqual(1);
     expect(findings[0]!.severity).toBe("critical");
@@ -108,8 +111,9 @@ describe("Access Control Rules", () => {
   });
 
   it("SF-AC-001: detects GitHub tokens", () => {
+    // Real-format token, not `ghp_1234...` sequential filler (a placeholder).
     const findings = evalRule("SF-AC-001", ctx([], [
-      file("env.json", '{ "token": "ghp_1234567890abcdefghijklmnopqrstuvwxyz1234" }'),
+      file("env.json", '{ "token": "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" }'),
     ]));
     expect(findings.length).toBeGreaterThanOrEqual(1);
   });
@@ -381,7 +385,7 @@ describe("Enterprise Finding Structure", () => {
     for (const rule of BUILT_IN_RULES) {
       const findings = rule.evaluate(ctx([agent], [
         file("CLAUDE.md", ""),
-        file("settings.json", '{ "key": "AKIAIOSFODNN7EXAMPLE" }'),
+        file("settings.json", '{ "key": "AKIA1B2C3D4E5F6G7H8I" }'),
       ]));
       for (const finding of findings) {
         const ef = finding as EnterpriseFinding;
